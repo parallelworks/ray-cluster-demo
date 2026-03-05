@@ -82,8 +82,8 @@ jobs:
             [ ${attempt} -gt ${MAX_ATTEMPTS} ] && { echo "ERROR: Timeout"; exit 1; }
           done
 
-          # Wait for HOSTNAME, SESSION_PORT, RAY_HEAD_IP
-          for file in HOSTNAME SESSION_PORT RAY_HEAD_IP; do
+          # Wait for HOSTNAME, SESSION_PORT, RAY_HEAD_IP, PYTHON_VERSION
+          for file in HOSTNAME SESSION_PORT RAY_HEAD_IP PYTHON_VERSION; do
             attempt=1
             while [ ! -f "${JOB_DIR}/${file}" ]; do
               echo "Waiting for ${file}..."
@@ -96,6 +96,7 @@ jobs:
           HOSTNAME=$(cat "${JOB_DIR}/HOSTNAME")
           SESSION_PORT=$(cat "${JOB_DIR}/SESSION_PORT")
           RAY_HEAD_IP=$(cat "${JOB_DIR}/RAY_HEAD_IP")
+          PYTHON_VERSION=$(cat "${JOB_DIR}/PYTHON_VERSION")
 
           # Wait for dashboard HTTP response
           echo "Waiting for http://${HOSTNAME}:${SESSION_PORT}..."
@@ -106,6 +107,7 @@ jobs:
               echo "HOSTNAME=${HOSTNAME}" >> "${OUTPUTS}"
               echo "SESSION_PORT=${SESSION_PORT}" >> "${OUTPUTS}"
               echo "RAY_HEAD_IP=${RAY_HEAD_IP}" >> "${OUTPUTS}"
+              echo "PYTHON_VERSION=${PYTHON_VERSION}" >> "${OUTPUTS}"
               exit 0
             fi
             [ -f "${JOB_DIR}/job.ended" ] && { echo "ERROR: Job ended"; exit 1; }
@@ -196,6 +198,7 @@ jobs:
           export RAY_VERSION="${{ inputs.ray_settings.ray_version }}"
           export RAY_HEAD_ADDRESS="localhost:${{ needs.wait_for_tunnel.outputs.TUNNEL_RAY_PORT }}"
           export DASHBOARD_URL="http://localhost:${{ needs.wait_for_tunnel.outputs.TUNNEL_PORT }}"
+          export PYTHON_MICRO_VERSION="${{ needs.wait_for_ray.outputs.PYTHON_VERSION }}"
           export SITE_ID="site-2"
           bash scripts/start_ray_workers.sh
 
