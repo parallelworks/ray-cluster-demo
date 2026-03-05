@@ -94,14 +94,17 @@ ray stop --force 2>/dev/null || true
 WORKER_RAYLET_PORT=20380
 WORKER_OBJ_PORT=20381
 
-# Use 127.0.0.1 as node IP so the head reaches this worker via the forward tunnel
-# (the head connects to 127.0.0.1:16380 which tunnels to this machine's localhost:16380)
+# Use 127.0.0.2 as node IP so the head reaches this worker via the forward tunnel.
+# NOTE: Must use 127.0.0.2 (not 127.0.0.1) because Ray's resolve_ip_for_localhost()
+# converts 127.0.0.1 to the real network IP, defeating our tunnel setup.
+# 127.0.0.2 is still a valid loopback address but bypasses Ray's conversion.
+WORKER_TUNNEL_IP=127.0.0.2
 echo "Connecting to Ray head at ${RAY_HEAD_ADDRESS}..."
-echo "  Node IP advertised: 127.0.0.1 (via SSH forward tunnel)"
+echo "  Node IP advertised: ${WORKER_TUNNEL_IP} (via SSH forward tunnel)"
 echo "  Raylet port: ${WORKER_RAYLET_PORT}"
 echo "  Object manager port: ${WORKER_OBJ_PORT}"
 ray start --address="${RAY_HEAD_ADDRESS}" \
-    --node-ip-address=127.0.0.1 \
+    --node-ip-address=${WORKER_TUNNEL_IP} \
     --node-manager-port=${WORKER_RAYLET_PORT} \
     --object-manager-port=${WORKER_OBJ_PORT}
 
