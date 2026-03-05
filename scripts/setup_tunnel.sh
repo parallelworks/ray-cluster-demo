@@ -86,6 +86,7 @@ echo "Tunnel dashboard port on cloud: ${TUNNEL_PORT}"
 echo "Tunnel Ray port on cloud: ${TUNNEL_RAY_PORT}"
 echo "${TUNNEL_PORT}" > "${JOB_DIR}/TUNNEL_PORT"
 echo "${TUNNEL_RAY_PORT}" > "${JOB_DIR}/TUNNEL_RAY_PORT"
+echo "${SSH_TARGET}" > "${JOB_DIR}/CLOUD_CLUSTER_NAME"
 
 # Start SSH tunnel with both reverse (-R) and forward (-L) port forwards:
 #   Reverse (cloud can reach on-prem):

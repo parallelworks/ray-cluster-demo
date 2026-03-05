@@ -378,6 +378,17 @@ let totalPlanned = 0;
 let startTime = null;
 const siteStats = {};
 const nodes = {};
+function mergeSiteStats(incoming) {
+  // Deep merge that preserves non-empty cluster_name
+  for (const [siteId, data] of Object.entries(incoming || {})) {
+    if (!siteStats[siteId]) { siteStats[siteId] = data; }
+    else {
+      const prev = siteStats[siteId].cluster_name;
+      Object.assign(siteStats[siteId], data);
+      if (!data.cluster_name && prev) siteStats[siteId].cluster_name = prev;
+    }
+  }
+}
 const taskHistory = [];  // recent tasks for placement animation
 const throughputHistory = [];
 let lastThroughputCheck = null;
@@ -882,7 +893,7 @@ function connect() {
       totalCompleted = msg.total_completed || 0;
       totalPlanned = msg.total_planned || 0;
       phase = msg.phase || 'waiting';
-      Object.assign(siteStats, msg.site_stats || {});
+      mergeSiteStats(msg.site_stats);
       Object.assign(nodes, msg.nodes || {});
 
       if (totalCompleted > 0) {
@@ -890,7 +901,7 @@ function connect() {
           totalCompleted = data.total_completed;
           totalPlanned = data.total_planned;
           phase = data.phase;
-          Object.assign(siteStats, data.site_stats || {});
+          mergeSiteStats(data.site_stats);
           Object.assign(nodes, data.nodes || {});
           throughputResults = data.throughput_results;
           computeResults = data.compute_results || [];
@@ -913,7 +924,7 @@ function connect() {
       }
     } else if (msg.type === 'worker') {
       Object.assign(nodes, msg.nodes || {});
-      Object.assign(siteStats, msg.site_stats || {});
+      mergeSiteStats(msg.site_stats);
       drawTopology();
       updateUI();
     } else if (msg.type === 'phase') {
@@ -924,7 +935,7 @@ function connect() {
       totalCompleted = msg.total_completed;
       totalPlanned = msg.total_planned;
       phase = msg.phase;
-      Object.assign(siteStats, msg.site_stats || {});
+      mergeSiteStats(msg.site_stats);
       drawPlacement();
       updateUI();
     } else if (msg.type === 'results') {
