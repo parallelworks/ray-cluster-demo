@@ -329,7 +329,6 @@ jobs:
             tooltip: Number of tiles per side (total tiles = N x N)
             default: "16"
             hidden: ${{ inputs.workload_settings.workload_type != 'fractal' }}
-            ignore: ${{ .hidden }}
             options:
               - value: "8"
                 label: "8x8 (64 tiles)"
@@ -344,7 +343,6 @@ jobs:
             tooltip: Size of each tile in pixels
             default: "256"
             hidden: ${{ inputs.workload_settings.workload_type != 'fractal' }}
-            ignore: ${{ .hidden }}
             options:
               - value: "128"
                 label: "128px (fast)"
@@ -358,7 +356,6 @@ jobs:
             label: Color Palette
             default: electric
             hidden: ${{ inputs.workload_settings.workload_type != 'fractal' }}
-            ignore: ${{ .hidden }}
             options:
               - value: electric
                 label: Electric Blue
