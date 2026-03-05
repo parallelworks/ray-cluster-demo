@@ -212,14 +212,47 @@ ray status 2>/dev/null || echo "Note: ray status may not work on worker node"
 WORKER_IP=\$(hostname -I 2>/dev/null | awk '{print \$1}')
 NUM_CPUS=\$(nproc 2>/dev/null || echo 1)
 
-# Auto-detect scheduler type from environment
-if [ -n "\${SLURM_JOB_ID}" ]; then
-    SCHED_TYPE="slurm"
-elif [ -n "\${PBS_JOBID}" ]; then
-    SCHED_TYPE="pbs"
-else
-    SCHED_TYPE="ssh"
+# Auto-detect cluster name and scheduler type using pw cluster list + hostname matching
+SCHED_TYPE=""
+CLUSTER_NAME=""
+PW_CMD_LOCAL=""
+for try_cmd in pw ~/pw/pw; do
+    command -v \$try_cmd &>/dev/null && { PW_CMD_LOCAL=\$try_cmd; break; }
+    [ -x "\$try_cmd" ] && { PW_CMD_LOCAL=\$try_cmd; break; }
+done
+
+if [ -n "\${PW_CMD_LOCAL}" ]; then
+    MY_HOST=\$(hostname -s)
+    while IFS= read -r line; do
+        uri=\$(echo "\$line" | awk '{print \$1}')
+        ctype=\$(echo "\$line" | awk '{print \$3}')
+        cname="\${uri##*/}"
+        if echo "\${MY_HOST}" | grep -qi "\${cname}"; then
+            CLUSTER_NAME="\${cname}"
+            case "\${ctype}" in
+                *slurm*) SCHED_TYPE="slurm" ;;
+                *pbs*)   SCHED_TYPE="pbs" ;;
+                existing) SCHED_TYPE="ssh" ;;
+                *)       SCHED_TYPE="\${ctype}" ;;
+            esac
+            break
+        fi
+    done < <(\${PW_CMD_LOCAL} cluster list 2>/dev/null | grep "^pw://\${PW_USER}/" | grep "active")
 fi
+
+# Fallback: check scheduler env vars
+if [ -z "\${SCHED_TYPE}" ]; then
+    if [ -n "\${SLURM_JOB_ID}" ]; then
+        SCHED_TYPE="slurm"
+    elif [ -n "\${PBS_JOBID}" ]; then
+        SCHED_TYPE="pbs"
+    else
+        SCHED_TYPE="ssh"
+    fi
+fi
+[ -z "\${CLUSTER_NAME}" ] && CLUSTER_NAME="${site_name}"
+
+echo "Detected cluster: \${CLUSTER_NAME} (\${SCHED_TYPE})"
 
 DASHBOARD_URL="http://localhost:${tunnel_dashboard_port}"
 curl -s -X POST "\${DASHBOARD_URL}/api/worker" \\
@@ -228,7 +261,7 @@ curl -s -X POST "\${DASHBOARD_URL}/api/worker" \\
         \"site_id\": \"${site_id}\",
         \"worker_ip\": \"\${WORKER_IP}\",
         \"num_cpus\": \${NUM_CPUS},
-        \"cluster_name\": \"${site_name}\",
+        \"cluster_name\": \"\${CLUSTER_NAME}\",
         \"scheduler_type\": \"\${SCHED_TYPE}\"
     }" 2>/dev/null || echo "Note: Could not notify dashboard"
 
