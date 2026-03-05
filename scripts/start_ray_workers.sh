@@ -91,8 +91,8 @@ fi
 ray stop --force 2>/dev/null || true
 
 # Fixed ports for bidirectional tunnel — must match setup_tunnel.sh
-WORKER_RAYLET_PORT=16380
-WORKER_OBJ_PORT=16381
+WORKER_RAYLET_PORT=20380
+WORKER_OBJ_PORT=20381
 
 # Use 127.0.0.1 as node IP so the head reaches this worker via the forward tunnel
 # (the head connects to 127.0.0.1:16380 which tunnels to this machine's localhost:16380)

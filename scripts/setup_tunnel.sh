@@ -24,8 +24,8 @@ RAY_PORT=6379
 
 # Fixed worker ports for bidirectional tunnel
 # These must match what start_ray_workers.sh uses with --node-manager-port / --object-manager-port
-WORKER_RAYLET_PORT=16380
-WORKER_OBJ_PORT=16381
+WORKER_RAYLET_PORT=20380
+WORKER_OBJ_PORT=20381
 
 # Find pw CLI
 PW_CMD=""
