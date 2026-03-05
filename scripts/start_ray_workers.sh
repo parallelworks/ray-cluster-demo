@@ -133,11 +133,14 @@ else
     SCHEDULER_TYPE="ssh"
 fi
 
-# Get cluster name: use first active cluster (there's typically only one per resource)
-if command -v pw &>/dev/null || [ -x "${HOME}/pw/pw" ]; then
+# Get cluster name: try coordination file first, then pw cluster list
+if [ -f "${JOB_DIR}/CLOUD_CLUSTER_NAME" ]; then
+    CLUSTER_NAME=$(cat "${JOB_DIR}/CLOUD_CLUSTER_NAME")
+elif command -v pw &>/dev/null || [ -x "${HOME}/pw/pw" ]; then
     PW_CMD=$(command -v pw 2>/dev/null || echo "${HOME}/pw/pw")
     CLUSTER_NAME=$(${PW_CMD} cluster list 2>/dev/null | awk '/^pw:\/\// {name=$1; sub(/.*\//, "", name); print name; exit}' || true)
 fi
+echo "Cluster name: ${CLUSTER_NAME:-unknown}"
 
 if [ -n "${DASHBOARD_URL}" ]; then
     curl -s -X POST "${DASHBOARD_URL}/api/worker" \
