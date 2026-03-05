@@ -8,10 +8,14 @@ import os
 import time
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 
 app = FastAPI()
+
+# Async HTTP client for proxying to Ray dashboard
+_ray_client = httpx.AsyncClient(base_url="http://localhost:8265", timeout=30.0)
 
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 
@@ -268,6 +272,34 @@ async def get_state():
         "elapsed_s": round(time.time() - state["start_time"], 1) if state["start_time"] else 0,
         "throughput_history": _compute_throughput_history(),
     }
+
+
+@app.api_route("/ray/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])
+async def ray_dashboard_proxy(request: Request, path: str):
+    """Reverse proxy to Ray's native dashboard on port 8265."""
+    url = f"/{path}"
+    if request.query_params:
+        url += f"?{request.query_params}"
+    try:
+        body = await request.body()
+        resp = await _ray_client.request(
+            method=request.method,
+            url=url,
+            headers={k: v for k, v in request.headers.items()
+                     if k.lower() not in ("host", "connection")},
+            content=body if body else None,
+        )
+        excluded = {"transfer-encoding", "connection", "content-encoding"}
+        headers = {k: v for k, v in resp.headers.items() if k.lower() not in excluded}
+        return StreamingResponse(
+            content=iter([resp.content]),
+            status_code=resp.status_code,
+            headers=headers,
+        )
+    except httpx.ConnectError:
+        return {"error": "Ray dashboard not available on port 8265"}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @app.websocket("/ws")

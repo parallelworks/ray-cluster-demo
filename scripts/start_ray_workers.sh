@@ -103,25 +103,20 @@ NUM_CPUS=$(nproc 2>/dev/null || echo 1)
 # Auto-detect cluster name and scheduler type
 CLUSTER_NAME=""
 SCHEDULER_TYPE=""
+
+# Detect scheduler type from environment
+if [ -n "${SLURM_JOB_ID}" ]; then
+    SCHEDULER_TYPE="slurm"
+elif [ -n "${PBS_JOBID}" ]; then
+    SCHEDULER_TYPE="pbs"
+else
+    SCHEDULER_TYPE="ssh"
+fi
+
+# Get cluster name: use first active cluster (there's typically only one per resource)
 if command -v pw &>/dev/null || [ -x "${HOME}/pw/pw" ]; then
     PW_CMD=$(command -v pw 2>/dev/null || echo "${HOME}/pw/pw")
-    MY_HOSTNAME=$(hostname)
-    while IFS=$'\t' read -r uri status type; do
-        name="${uri##*/}"
-        # Check if this cluster matches our hostname
-        cluster_ip=$(${PW_CMD} cluster info "${name}" 2>/dev/null | grep -i "masterNode\|controllerIP\|ip" | head -1 | awk '{print $NF}' || echo "")
-        if [ -n "${cluster_ip}" ]; then
-            CLUSTER_NAME="${name}"
-            if [ -n "${SLURM_JOB_ID}" ]; then
-                SCHEDULER_TYPE="slurm"
-            elif [ -n "${PBS_JOBID}" ]; then
-                SCHEDULER_TYPE="pbs"
-            else
-                SCHEDULER_TYPE="ssh"
-            fi
-            break
-        fi
-    done < <(${PW_CMD} cluster list 2>/dev/null | grep "^pw://" || true)
+    CLUSTER_NAME=$(${PW_CMD} cluster list 2>/dev/null | awk '/^pw:\/\// {name=$1; sub(/.*\//, "", name); print name; exit}' || true)
 fi
 
 if [ -n "${DASHBOARD_URL}" ]; then
