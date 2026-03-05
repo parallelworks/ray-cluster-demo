@@ -120,17 +120,43 @@ def scaling_task(task_id, ray_head_ip):
     }
 
 
-def run_phase(phase_name, futures, dashboard_url, ray_head_ip, onprem_cluster_name=""):
+def fetch_site_metadata(dashboard_url):
+    """Fetch site metadata (cluster_name, scheduler_type) from dashboard state."""
+    try:
+        req = urllib.request.Request(f"{dashboard_url}/api/state")
+        resp = urllib.request.urlopen(req, timeout=10)
+        data = json.loads(resp.read().decode())
+        site_stats = data.get("site_stats", {})
+        # Build site_id -> {cluster_name, scheduler_type} mapping
+        meta = {}
+        for site_id, stats in site_stats.items():
+            meta[site_id] = {
+                "cluster_name": stats.get("cluster_name", ""),
+                "scheduler_type": stats.get("scheduler_type", ""),
+            }
+        return meta
+    except Exception as e:
+        print(f"  Warning: Could not fetch site metadata: {e}")
+        return {}
+
+
+def run_phase(phase_name, futures, dashboard_url, ray_head_ip, site_metadata=None):
     """Collect results from futures, POSTing each to dashboard."""
+    if site_metadata is None:
+        site_metadata = {}
     print(f"\n  Collecting {len(futures)} {phase_name} results...")
     completed = 0
     for future in futures:
         try:
             result = ray.get(future, timeout=120)
-            # Add cluster name metadata
-            if result["site_id"] == "site-1" and onprem_cluster_name:
-                result["cluster_name"] = onprem_cluster_name
-                result["scheduler_type"] = "ssh"
+            # Enrich with cluster metadata from site_metadata mapping
+            site_id = result.get("site_id", "")
+            if site_id in site_metadata:
+                meta = site_metadata[site_id]
+                if meta.get("cluster_name"):
+                    result["cluster_name"] = meta["cluster_name"]
+                if meta.get("scheduler_type"):
+                    result["scheduler_type"] = meta["scheduler_type"]
             post_json(f"{dashboard_url}/api/task", result)
             completed += 1
             if completed % 50 == 0:
@@ -147,6 +173,7 @@ def main():
     parser.add_argument("--num-tasks", type=int, default=500)
     parser.add_argument("--matrix-size", type=int, default=500)
     parser.add_argument("--onprem-cluster-name", default="")
+    parser.add_argument("--onprem-scheduler-type", default="ssh")
     args = parser.parse_args()
 
     dashboard_url = args.dashboard_url.rstrip("/")
@@ -184,8 +211,18 @@ def main():
             if n.get("NodeManagerAddress") == ray_head_ip
         )),
         "cluster_name": args.onprem_cluster_name,
-        "scheduler_type": "ssh",
+        "scheduler_type": args.onprem_scheduler_type,
     })
+
+    # Fetch site metadata from dashboard (includes worker registrations from dispatch_workers)
+    # This maps site_id -> {cluster_name, scheduler_type} for ALL sites
+    site_metadata = fetch_site_metadata(dashboard_url)
+    # Ensure head node metadata is included
+    site_metadata["site-1"] = {
+        "cluster_name": args.onprem_cluster_name,
+        "scheduler_type": args.onprem_scheduler_type,
+    }
+    print(f"\nSite metadata: {json.dumps(site_metadata, indent=2)}")
 
     overall_start = time.time()
 
@@ -199,7 +236,7 @@ def main():
 
     t1_start = time.time()
     futures = [throughput_task.remote(i, ray_head_ip) for i in range(num_tasks)]
-    completed = run_phase("throughput", futures, dashboard_url, ray_head_ip, args.onprem_cluster_name)
+    completed = run_phase("throughput", futures, dashboard_url, ray_head_ip, site_metadata)
     t1_duration = time.time() - t1_start
     tasks_per_sec = completed / t1_duration if t1_duration > 0 else 0
 
@@ -232,7 +269,7 @@ def main():
     post_json(f"{dashboard_url}/api/phase", {"phase": "compute"})
 
     futures = [compute_task.remote(num_tasks + i, matrix_size, ray_head_ip) for i in range(num_compute)]
-    run_phase("compute", futures, dashboard_url, ray_head_ip, args.onprem_cluster_name)
+    run_phase("compute", futures, dashboard_url, ray_head_ip, site_metadata)
 
     # Collect compute results
     for f in futures:
@@ -260,7 +297,7 @@ def main():
 
     t3_start = time.time()
     futures = [scaling_task.remote(num_tasks + num_compute + i, ray_head_ip) for i in range(num_tasks)]
-    completed = run_phase("scaling", futures, dashboard_url, ray_head_ip, args.onprem_cluster_name)
+    completed = run_phase("scaling", futures, dashboard_url, ray_head_ip, site_metadata)
     t3_duration = time.time() - t3_start
     dual_site_tps = completed / t3_duration if t3_duration > 0 else 0
 

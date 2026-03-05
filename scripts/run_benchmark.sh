@@ -59,19 +59,40 @@ fi
 
 ray status
 
-# Auto-detect cluster name for on-prem (site-1)
+# Auto-detect cluster name and scheduler type for head node (site-1)
+# Uses pw cluster list and hostname matching, same pattern as burst-render-demo
 CLUSTER_NAME=""
-SCHEDULER_TYPE="ssh"
-if command -v pw &>/dev/null || [ -x "${HOME}/pw/pw" ]; then
-    PW_CMD=$(command -v pw 2>/dev/null || echo "${HOME}/pw/pw")
-    while IFS= read -r uri; do
-        name="${uri##*/}"
-        CLUSTER_NAME="${name}"
-        break
-    done < <(${PW_CMD} cluster list 2>/dev/null | awk '/^pw:\/\/'"${PW_USER}"'/ && /active/ && /existing/ {print $1}')
-fi
+SCHEDULER_TYPE=""
+PW_CMD=""
+for cmd in pw ~/pw/pw; do
+    command -v $cmd &>/dev/null && { PW_CMD=$cmd; break; }
+    [ -x "$cmd" ] && { PW_CMD=$cmd; break; }
+done
 
-echo "On-prem cluster name: ${CLUSTER_NAME:-unknown}"
+if [ -n "${PW_CMD}" ]; then
+    MY_HOST=$(hostname -s)
+    while IFS= read -r line; do
+        uri=$(echo "$line" | awk '{print $1}')
+        ctype=$(echo "$line" | awk '{print $3}')
+        name="${uri##*/}"
+        # Match hostname containing the cluster name
+        if echo "${MY_HOST}" | grep -qi "${name}"; then
+            CLUSTER_NAME="${name}"
+            case "${ctype}" in
+                *slurm*) SCHEDULER_TYPE="slurm" ;;
+                *pbs*)   SCHEDULER_TYPE="pbs" ;;
+                existing) SCHEDULER_TYPE="ssh" ;;
+                *)       SCHEDULER_TYPE="${ctype}" ;;
+            esac
+            break
+        fi
+    done < <(${PW_CMD} cluster list 2>/dev/null | grep "^pw://${PW_USER}/" | grep "active")
+fi
+[ -z "${CLUSTER_NAME}" ] && CLUSTER_NAME="$(hostname -s)"
+[ -z "${SCHEDULER_TYPE}" ] && SCHEDULER_TYPE="ssh"
+
+echo "Cluster name:   ${CLUSTER_NAME}"
+echo "Scheduler type: ${SCHEDULER_TYPE}"
 
 # Run benchmark
 ${PYTHON_CMD} "${SCRIPT_DIR}/benchmark.py" \
@@ -79,7 +100,8 @@ ${PYTHON_CMD} "${SCRIPT_DIR}/benchmark.py" \
     --ray-head-ip "${RAY_HEAD_IP}" \
     --num-tasks "${NUM_TASKS:-500}" \
     --matrix-size "${MATRIX_SIZE:-500}" \
-    --onprem-cluster-name "${CLUSTER_NAME}"
+    --onprem-cluster-name "${CLUSTER_NAME}" \
+    --onprem-scheduler-type "${SCHEDULER_TYPE}"
 
 echo "=========================================="
 echo "Benchmark Complete!"
