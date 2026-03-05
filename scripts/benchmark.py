@@ -44,10 +44,11 @@ def detect_site(ray_head_ip):
 
 @ray.remote
 def throughput_task(task_id, ray_head_ip):
-    """Small task for measuring scheduling throughput."""
+    """Task for measuring scheduling throughput across nodes."""
     start = time.time()
-    # Light computation — just enough to measure scheduling overhead
-    total = sum(range(10000))
+    # Simulate real workload latency so Ray's scheduler distributes across nodes
+    time.sleep(0.05)
+    total = sum(range(100000))
     duration_ms = (time.time() - start) * 1000
     site_id, node_ip = detect_site(ray_head_ip)
     return {
@@ -92,7 +93,8 @@ def compute_task(task_id, matrix_size, ray_head_ip):
 def scaling_task(task_id, ray_head_ip):
     """Medium task for scaling test."""
     start = time.time()
-    # Moderate workload
+    # Moderate workload with sleep to ensure distribution across nodes
+    time.sleep(0.02)
     a = np.random.randn(200, 200)
     for _ in range(5):
         a = a @ np.random.randn(200, 200)

@@ -53,12 +53,12 @@ ${PYTHON_CMD} -c "import fastapi" 2>/dev/null || {
     if command -v uv &>/dev/null || [ -x "$HOME/.local/bin/uv" ] || [ -x "$HOME/.cargo/bin/uv" ]; then
         UV_CMD=$(command -v uv 2>/dev/null || echo "$HOME/.local/bin/uv")
         [ -x "$UV_CMD" ] || UV_CMD="$HOME/.cargo/bin/uv"
-        $UV_CMD pip install --python "${PYTHON_CMD}" fastapi uvicorn websockets 2>&1 || {
+        $UV_CMD pip install --python "${PYTHON_CMD}" fastapi uvicorn websockets httpx 2>&1 || {
             echo "[ERROR] Failed to install dashboard dependencies via uv"
             exit 1
         }
     else
-        ${PYTHON_CMD} -m pip install --quiet fastapi uvicorn websockets 2>&1 || {
+        ${PYTHON_CMD} -m pip install --quiet fastapi uvicorn websockets httpx 2>&1 || {
             echo "[ERROR] Failed to install dashboard dependencies"
             exit 1
         }
