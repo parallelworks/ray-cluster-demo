@@ -103,8 +103,8 @@ ssh -i ~/.ssh/pwcli \
     -o ProxyCommand="pw ssh --proxy-command %h" \
     -R "${TUNNEL_PORT}:localhost:${DASHBOARD_PORT}" \
     -R "${TUNNEL_RAY_PORT}:localhost:${RAY_PORT}" \
-    -L "${WORKER_RAYLET_PORT}:localhost:${WORKER_RAYLET_PORT}" \
-    -L "${WORKER_OBJ_PORT}:localhost:${WORKER_OBJ_PORT}" \
+    -L "127.0.0.2:${WORKER_RAYLET_PORT}:localhost:${WORKER_RAYLET_PORT}" \
+    -L "127.0.0.2:${WORKER_OBJ_PORT}:localhost:${WORKER_OBJ_PORT}" \
     -N "${PW_USER}@${SSH_TARGET}" &
 TUNNEL_PID=$!
 sleep 3
