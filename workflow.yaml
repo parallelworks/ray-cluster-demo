@@ -1,0 +1,376 @@
+# yaml-language-server: $schema=https://activate.parallel.works/workflow.schema.json
+---
+# Multi-Site Ray Cluster — unified compute fabric across two ACTIVATE resources
+# Ray head on on-prem, workers join from cloud via reverse SSH tunnel
+# Live dashboard shows cluster topology, task placement, and benchmark results
+
+permissions:
+  - "*"
+sessions:
+  session:
+    useTLS: false
+    redirect: true
+
+jobs:
+  # =============================================================================
+  # CHECKOUT — Clone scripts to both resources
+  # =============================================================================
+  checkout_onprem:
+    steps:
+      - name: Checkout scripts to on-prem resource
+        uses: parallelworks/checkout
+        ssh:
+          remoteHost: ${{ inputs.onprem_resource.ip }}
+        with:
+          repo: https://github.com/parallelworks/ray-cluster-demo.git
+          branch: main
+          sparse_checkout:
+            - scripts
+
+  checkout_cloud:
+    needs: [checkout_onprem]
+    steps:
+      - name: Checkout scripts to cloud resource
+        uses: parallelworks/checkout
+        ssh:
+          remoteHost: ${{ inputs.cloud_resource.ip }}
+        with:
+          repo: https://github.com/parallelworks/ray-cluster-demo.git
+          branch: main
+          sparse_checkout:
+            - scripts
+
+  # =============================================================================
+  # RAY HEAD — Start Ray head node + dashboard on on-prem resource
+  # =============================================================================
+  start_ray_head:
+    needs: [checkout_onprem]
+    ssh:
+      remoteHost: ${{ inputs.onprem_resource.ip }}
+    steps:
+      - name: Setup and start Ray head + dashboard
+        run: |
+          set -e
+          export RAY_VERSION="${{ inputs.ray_settings.ray_version }}"
+          bash scripts/start_ray_head.sh
+
+  # =============================================================================
+  # WAIT FOR RAY — Poll for coordination files (Ray head + dashboard)
+  # =============================================================================
+  wait_for_ray:
+    needs: [checkout_onprem]
+    ssh:
+      remoteHost: ${{ inputs.onprem_resource.ip }}
+    steps:
+      - name: Wait for Ray head and dashboard
+        early-cancel: any-job-failed
+        run: |
+          set -e
+          JOB_DIR="${PW_PARENT_JOB_DIR%/}"
+          MAX_ATTEMPTS=120
+          INTERVAL=3
+
+          echo "Waiting for Ray head and dashboard..."
+
+          # Wait for job.started
+          attempt=1
+          while [ ! -f "${JOB_DIR}/job.started" ]; do
+            [ -f "${JOB_DIR}/job.ended" ] && { echo "ERROR: Job ended before starting"; exit 1; }
+            echo "[${attempt}/${MAX_ATTEMPTS}] Waiting for job.started..."
+            sleep ${INTERVAL}
+            ((attempt++))
+            [ ${attempt} -gt ${MAX_ATTEMPTS} ] && { echo "ERROR: Timeout"; exit 1; }
+          done
+
+          # Wait for HOSTNAME, SESSION_PORT, RAY_HEAD_IP
+          for file in HOSTNAME SESSION_PORT RAY_HEAD_IP; do
+            attempt=1
+            while [ ! -f "${JOB_DIR}/${file}" ]; do
+              echo "Waiting for ${file}..."
+              sleep 2
+              ((attempt++))
+              [ ${attempt} -gt 60 ] && { echo "ERROR: ${file} not found"; exit 1; }
+            done
+          done
+
+          HOSTNAME=$(cat "${JOB_DIR}/HOSTNAME")
+          SESSION_PORT=$(cat "${JOB_DIR}/SESSION_PORT")
+          RAY_HEAD_IP=$(cat "${JOB_DIR}/RAY_HEAD_IP")
+
+          # Wait for dashboard HTTP response
+          echo "Waiting for http://${HOSTNAME}:${SESSION_PORT}..."
+          attempt=1
+          while [ ${attempt} -le ${MAX_ATTEMPTS} ]; do
+            if curl -s --connect-timeout 5 "http://${HOSTNAME}:${SESSION_PORT}/" -o /dev/null 2>&1; then
+              echo "Dashboard is ready!"
+              echo "HOSTNAME=${HOSTNAME}" >> "${OUTPUTS}"
+              echo "SESSION_PORT=${SESSION_PORT}" >> "${OUTPUTS}"
+              echo "RAY_HEAD_IP=${RAY_HEAD_IP}" >> "${OUTPUTS}"
+              exit 0
+            fi
+            [ -f "${JOB_DIR}/job.ended" ] && { echo "ERROR: Job ended"; exit 1; }
+            echo "[${attempt}/${MAX_ATTEMPTS}] Dashboard not ready..."
+            sleep ${INTERVAL}
+            ((attempt++))
+          done
+          echo "ERROR: Dashboard timeout"
+          exit 1
+
+  # =============================================================================
+  # UPDATE SESSION — Configure session proxy for dashboard
+  # =============================================================================
+  update_session:
+    needs: [wait_for_ray]
+    ssh:
+      remoteHost: ${{ inputs.onprem_resource.ip }}
+    steps:
+      - name: Get local port
+        run: |
+          local_port=$(pw agent open-port)
+          echo "local_port=${local_port}" | tee -a $OUTPUTS
+
+      - name: Update session
+        uses: parallelworks/update-session
+        with:
+          target: ${{ inputs.onprem_resource.id }}
+          name: ${{ sessions.session }}
+          remoteHost: ${{ needs.wait_for_ray.outputs.HOSTNAME }}
+          remotePort: ${{ needs.wait_for_ray.outputs.SESSION_PORT }}
+          local_port: ${{ needs.update_session.outputs.local_port }}
+
+  # =============================================================================
+  # TUNNEL — Reverse SSH tunnel from on-prem to cloud for Ray GCS port
+  # =============================================================================
+  setup_tunnel:
+    needs: [wait_for_ray, checkout_cloud]
+    ssh:
+      remoteHost: ${{ inputs.onprem_resource.ip }}
+    steps:
+      - name: Create reverse tunnel to cloud
+        run: |
+          set -e
+          export DASHBOARD_PORT=$(cat "${PW_PARENT_JOB_DIR}/SESSION_PORT")
+          export RAY_HEAD_IP=$(cat "${PW_PARENT_JOB_DIR}/RAY_HEAD_IP")
+          bash scripts/setup_tunnel.sh
+
+  # =============================================================================
+  # WAIT FOR TUNNEL — Poll for tunnel coordination file
+  # =============================================================================
+  wait_for_tunnel:
+    needs: [wait_for_ray]
+    ssh:
+      remoteHost: ${{ inputs.onprem_resource.ip }}
+    steps:
+      - name: Wait for tunnel ready
+        early-cancel: any-job-failed
+        run: |
+          set -e
+          JOB_DIR="${PW_PARENT_JOB_DIR%/}"
+
+          echo "Waiting for tunnel..."
+          attempt=1
+          while [ ! -f "${JOB_DIR}/TUNNEL_PORT" ]; do
+            echo "[${attempt}/60] Waiting for TUNNEL_PORT..."
+            sleep 2
+            ((attempt++))
+            [ ${attempt} -gt 60 ] && { echo "ERROR: Tunnel timeout"; exit 1; }
+          done
+          TUNNEL_PORT=$(cat "${JOB_DIR}/TUNNEL_PORT")
+          TUNNEL_RAY_PORT=$(cat "${JOB_DIR}/TUNNEL_RAY_PORT")
+          echo "Tunnel dashboard port: ${TUNNEL_PORT}"
+          echo "Tunnel Ray port: ${TUNNEL_RAY_PORT}"
+          echo "TUNNEL_PORT=${TUNNEL_PORT}" >> "${OUTPUTS}"
+          echo "TUNNEL_RAY_PORT=${TUNNEL_RAY_PORT}" >> "${OUTPUTS}"
+
+  # =============================================================================
+  # RAY WORKERS — Connect cloud workers to Ray head via tunnel
+  # =============================================================================
+  start_ray_workers:
+    needs: [wait_for_ray, wait_for_tunnel, checkout_cloud]
+    ssh:
+      remoteHost: ${{ inputs.cloud_resource.ip }}
+    steps:
+      - name: Start Ray workers on cloud
+        run: |
+          set -e
+          export RAY_VERSION="${{ inputs.ray_settings.ray_version }}"
+          export RAY_HEAD_ADDRESS="localhost:${{ needs.wait_for_tunnel.outputs.TUNNEL_RAY_PORT }}"
+          export DASHBOARD_URL="http://localhost:${{ needs.wait_for_tunnel.outputs.TUNNEL_PORT }}"
+          export SITE_ID="site-2"
+          bash scripts/start_ray_workers.sh
+
+  # =============================================================================
+  # BENCHMARK — Run distributed benchmark across both sites
+  # =============================================================================
+  run_benchmark:
+    needs: [start_ray_workers, wait_for_ray]
+    ssh:
+      remoteHost: ${{ inputs.onprem_resource.ip }}
+    steps:
+      - name: Run distributed benchmark
+        run: |
+          set -e
+          export DASHBOARD_URL="http://localhost:$(cat ${PW_PARENT_JOB_DIR}/SESSION_PORT)"
+          export RAY_HEAD_IP=$(cat "${PW_PARENT_JOB_DIR}/RAY_HEAD_IP")
+          export NUM_TASKS="${{ inputs.benchmark_settings.num_tasks }}"
+          export MATRIX_SIZE="${{ inputs.benchmark_settings.matrix_size }}"
+          bash scripts/run_benchmark.sh
+
+  # =============================================================================
+  # COMPLETE — Print summary
+  # =============================================================================
+  complete:
+    needs: [run_benchmark, update_session]
+    steps:
+      - name: Workflow complete
+        run: |
+          basepath="/me/session/${PW_USER}/${{ sessions.session }}"
+          local_port="${{ needs.update_session.outputs.local_port }}"
+          echo "=========================================="
+          echo "Multi-Site Ray Cluster Demo Complete!"
+          echo "=========================================="
+          echo "  Ray Version: ${{ inputs.ray_settings.ray_version }}"
+          echo "  Benchmark Tasks: ${{ inputs.benchmark_settings.num_tasks }}"
+          echo ""
+          echo "  Dashboard: https://${PW_PLATFORM_HOST}${basepath}/"
+          echo "  Local tunnel: ssh -L ${local_port}:localhost:${local_port} -o ProxyCommand=\"pw ssh --proxy-command %h\" ${PW_USER}@workspace"
+          echo "  Then access: http://localhost:${local_port}/"
+          echo "=========================================="
+
+"on":
+  execute:
+    inputs:
+      # -----------------------------------------------------------------------
+      # Resources
+      # -----------------------------------------------------------------------
+      onprem_resource:
+        type: compute-clusters
+        label: On-Prem Resource (Ray Head + Dashboard)
+        tooltip: Always-on resource for Ray head node and live dashboard (e.g., a30gpu). Runs via SSH (no scheduler).
+        include-workspace: false
+        autoselect: true
+
+      cloud_resource:
+        type: compute-clusters
+        label: Cloud Resource (Ray Workers)
+        tooltip: Cloud cluster for Ray worker nodes (e.g., googlerockyv3). Workers connect to head via reverse tunnel.
+        include-workspace: false
+
+      # -----------------------------------------------------------------------
+      # Ray Settings
+      # -----------------------------------------------------------------------
+      ray_settings:
+        type: group
+        label: Ray Configuration
+        items:
+          ray_version:
+            type: dropdown
+            label: Ray Version
+            tooltip: Version of Ray to install on all nodes
+            default: "2.40.0"
+            options:
+              - value: "2.40.0"
+                label: "2.40.0 (latest stable)"
+              - value: "2.39.0"
+                label: "2.39.0"
+              - value: "2.38.0"
+                label: "2.38.0"
+
+      # -----------------------------------------------------------------------
+      # Benchmark Settings
+      # -----------------------------------------------------------------------
+      benchmark_settings:
+        type: group
+        label: Benchmark Settings
+        items:
+          num_tasks:
+            type: dropdown
+            label: Task Count
+            tooltip: Number of benchmark tasks to distribute across the Ray cluster
+            default: "500"
+            options:
+              - value: "100"
+                label: "100 tasks (quick test)"
+              - value: "500"
+                label: "500 tasks (default)"
+              - value: "1000"
+                label: "1,000 tasks"
+              - value: "2000"
+                label: "2,000 tasks (intensive)"
+
+          matrix_size:
+            type: dropdown
+            label: Matrix Size (CPU Compute)
+            tooltip: Size of matrices for CPU compute benchmark (NxN)
+            default: "500"
+            options:
+              - value: "200"
+                label: "200x200 (fast)"
+              - value: "500"
+                label: "500x500 (default)"
+              - value: "1000"
+                label: "1000x1000 (compute-heavy)"
+
+      # -----------------------------------------------------------------------
+      # Scheduler
+      # -----------------------------------------------------------------------
+      submit_cloud_to_scheduler:
+        type: boolean
+        label: Submit Cloud Job to Scheduler
+        tooltip: Enable to submit the cloud worker job via SLURM. Disable for direct SSH execution.
+        default: false
+        hidden: ${{ inputs.cloud_resource.schedulerType != 'slurm' && inputs.cloud_resource.schedulerType != 'pbs' }}
+
+      slurm:
+        type: group
+        label: SLURM Configuration (Cloud)
+        hidden: ${{ inputs.submit_cloud_to_scheduler != true || inputs.cloud_resource.schedulerType != 'slurm' }}
+        collapsed: true
+        items:
+          is_disabled:
+            type: boolean
+            default: ${{ inputs.submit_cloud_to_scheduler != true || inputs.cloud_resource.schedulerType != 'slurm' }}
+            hidden: true
+
+          account:
+            label: Account
+            type: slurm-accounts
+            resource: ${{ inputs.cloud_resource }}
+            tooltip: SLURM account (--account)
+            optional: true
+            ignore: ${{ inputs.submit_cloud_to_scheduler != true || inputs.cloud_resource.schedulerType != 'slurm' }}
+
+          partition:
+            type: slurm-partitions
+            label: Partition
+            optional: true
+            resource: ${{ inputs.cloud_resource }}
+            tooltip: Partition (--partition)
+            ignore: ${{ inputs.submit_cloud_to_scheduler != true || inputs.cloud_resource.schedulerType != 'slurm' }}
+
+          qos:
+            label: QoS
+            type: slurm-qos
+            resource: ${{ inputs.cloud_resource }}
+            optional: true
+            ignore: ${{ inputs.submit_cloud_to_scheduler != true || inputs.cloud_resource.schedulerType != 'slurm' }}
+
+          cpus_per_task:
+            type: number
+            label: CPUs per Task
+            min: 1
+            max: 256
+            default: 4
+            ignore: ${{ inputs.submit_cloud_to_scheduler != true || inputs.cloud_resource.schedulerType != 'slurm' }}
+
+          time:
+            label: Walltime
+            type: string
+            default: 01:00:00
+            ignore: ${{ inputs.submit_cloud_to_scheduler != true || inputs.cloud_resource.schedulerType != 'slurm' }}
+
+          scheduler_directives:
+            type: editor
+            label: Additional Directives
+            optional: true
+            ignore: ${{ inputs.submit_cloud_to_scheduler != true || inputs.cloud_resource.schedulerType != 'slurm' }}

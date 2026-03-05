@@ -1,0 +1,114 @@
+#!/bin/bash
+# setup_tunnel.sh — Create reverse SSH tunnel from on-prem to cloud
+#
+# Tunnels two ports to the cloud:
+#   1. Dashboard port (for benchmark results POST)
+#   2. Ray GCS port 6379 (for Ray worker connection)
+#
+# Environment variables:
+#   DASHBOARD_PORT      - Port of the dashboard on this machine
+#   RAY_HEAD_IP         - IP of the Ray head node
+#   PW_USER             - ACTIVATE username for SSH
+
+set -e
+
+echo "=========================================="
+echo "Setting up reverse tunnel: $(date)"
+echo "=========================================="
+echo "Dashboard port:  ${DASHBOARD_PORT}"
+echo "Ray head IP:     ${RAY_HEAD_IP}"
+echo "PW user:         ${PW_USER}"
+
+JOB_DIR="${PW_PARENT_JOB_DIR%/}"
+RAY_PORT=6379
+
+# Find pw CLI
+PW_CMD=""
+for cmd in pw ~/pw/pw; do
+    command -v $cmd &>/dev/null && { PW_CMD=$cmd; break; }
+    [ -x "$cmd" ] && { PW_CMD=$cmd; break; }
+done
+echo "PW CLI: ${PW_CMD:-not found}"
+
+# Resolve SSH target — discover from pw cluster list
+SSH_TARGET=""
+if [ -n "${PW_CMD}" ]; then
+    echo "Discovering cloud resource from pw cluster list..."
+    while IFS= read -r uri; do
+        name="${uri##*/}"
+        SSH_TARGET="${name}"
+        echo "  Discovered cloud resource: ${name}"
+        break
+    done < <(${PW_CMD} cluster list 2>/dev/null | awk '/^pw:\/\/'"${PW_USER}"'/ && /active/ && !/existing/ {print $1}')
+fi
+
+if [ -z "${SSH_TARGET}" ]; then
+    echo "[ERROR] Could not determine cloud resource name"
+    ${PW_CMD} cluster list 2>/dev/null || echo "  (pw CLI not available)"
+    exit 1
+fi
+
+echo "SSH target: ${SSH_TARGET}"
+
+# Helper: run command on cloud via pw ssh proxy
+run_on_cloud() {
+    ssh -i ~/.ssh/pwcli \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -o ProxyCommand="pw ssh --proxy-command %h" \
+        "${PW_USER}@${SSH_TARGET}" "$@"
+}
+
+# Allocate two ports on the cloud side
+echo "Allocating ports on cloud..."
+TUNNEL_PORT=$(run_on_cloud 'python3 -c "import socket; s=socket.socket(); s.bind((\"\",0)); print(s.getsockname()[1]); s.close()"' 2>/dev/null)
+TUNNEL_RAY_PORT=$(run_on_cloud 'python3 -c "import socket; s=socket.socket(); s.bind((\"\",0)); print(s.getsockname()[1]); s.close()"' 2>/dev/null)
+
+if [ -z "${TUNNEL_PORT}" ] || ! [[ "${TUNNEL_PORT}" =~ ^[0-9]+$ ]]; then
+    echo "[ERROR] Failed to allocate dashboard tunnel port (got: '${TUNNEL_PORT}')"
+    exit 1
+fi
+if [ -z "${TUNNEL_RAY_PORT}" ] || ! [[ "${TUNNEL_RAY_PORT}" =~ ^[0-9]+$ ]]; then
+    echo "[ERROR] Failed to allocate Ray tunnel port (got: '${TUNNEL_RAY_PORT}')"
+    exit 1
+fi
+
+echo "Tunnel dashboard port on cloud: ${TUNNEL_PORT}"
+echo "Tunnel Ray port on cloud: ${TUNNEL_RAY_PORT}"
+echo "${TUNNEL_PORT}" > "${JOB_DIR}/TUNNEL_PORT"
+echo "${TUNNEL_RAY_PORT}" > "${JOB_DIR}/TUNNEL_RAY_PORT"
+
+# Start reverse SSH tunnel with both port forwards:
+#   cloud:TUNNEL_PORT     -> onprem:DASHBOARD_PORT
+#   cloud:TUNNEL_RAY_PORT -> onprem:RAY_PORT
+echo "Establishing reverse SSH tunnel..."
+ssh -i ~/.ssh/pwcli \
+    -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    -o ExitOnForwardFailure=yes \
+    -o ServerAliveInterval=15 \
+    -o ProxyCommand="pw ssh --proxy-command %h" \
+    -R "${TUNNEL_PORT}:localhost:${DASHBOARD_PORT}" \
+    -R "${TUNNEL_RAY_PORT}:${RAY_HEAD_IP}:${RAY_PORT}" \
+    -N "${PW_USER}@${SSH_TARGET}" &
+TUNNEL_PID=$!
+sleep 3
+
+if kill -0 ${TUNNEL_PID} 2>/dev/null; then
+    echo "=========================================="
+    echo "Reverse tunnel ESTABLISHED (PID ${TUNNEL_PID})"
+    echo "  Cloud localhost:${TUNNEL_PORT} -> On-prem localhost:${DASHBOARD_PORT}"
+    echo "  Cloud localhost:${TUNNEL_RAY_PORT} -> On-prem ${RAY_HEAD_IP}:${RAY_PORT}"
+    echo "=========================================="
+    echo "TUNNEL_PORT=${TUNNEL_PORT}" >> "${OUTPUTS}"
+    echo "TUNNEL_RAY_PORT=${TUNNEL_RAY_PORT}" >> "${OUTPUTS}"
+
+    # Keep tunnel alive
+    while kill -0 ${TUNNEL_PID} 2>/dev/null; do
+        sleep 5
+    done
+    echo "Tunnel process exited"
+else
+    echo "[ERROR] Failed to establish tunnel"
+    exit 1
+fi
