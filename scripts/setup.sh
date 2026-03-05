@@ -52,8 +52,11 @@ echo "Installing Ray ${RAY_VERSION}..."
 
 if install_uv; then
     echo "Using uv for fast installation..."
+    # Use exact Python micro version if specified (ensures head/worker match)
+    UV_PYTHON="${PYTHON_MICRO_VERSION:-3.12}"
+    echo "Python version for venv: ${UV_PYTHON}"
     if [ ! -d "${VENV_DIR}" ]; then
-        uv venv "${VENV_DIR}" --python 3.12
+        uv venv "${VENV_DIR}" --python "${UV_PYTHON}"
     fi
     uv pip install --python "${VENV_DIR}/bin/python" \
         "ray[default]==${RAY_VERSION}" numpy

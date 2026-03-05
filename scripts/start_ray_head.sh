@@ -92,6 +92,11 @@ ss -tlnp 2>/dev/null | grep ":${RAY_PORT}" || netstat -tlnp 2>/dev/null | grep "
 echo "Ray head started on ${HEAD_IP}:${RAY_PORT}"
 ray status
 
+# Record exact Python version for worker matching
+PYTHON_MICRO=$($PYTHON_CMD -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}')")
+echo "${PYTHON_MICRO}" > PYTHON_VERSION
+echo "Python version (for workers to match): ${PYTHON_MICRO}"
+
 # =============================================================================
 # Port allocation for custom dashboard
 # =============================================================================
