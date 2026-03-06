@@ -135,7 +135,7 @@ if install_uv; then
     # packages that increase download size and can fail on restricted networks.
     # Our custom dashboard and core Ray functionality work fine without them.
     ${UV_BIN} pip install --python "${VENV_DIR}/bin/python" \
-        --timeout 120 \
+        --read-timeout 120 \
         "ray==${RAY_VERSION}" numpy
 else
     if [ "${NEED_PYTHON_BOOTSTRAP}" = "true" ]; then
