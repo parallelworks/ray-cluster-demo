@@ -114,7 +114,7 @@ def proxy(src, dst):
     finally: src.close(); dst.close()
 s = socket.socket()
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-s.bind(("0.0.0.0", int(sys.argv[1])))
+s.bind(("", int(sys.argv[1])))
 s.listen(64)
 if len(sys.argv) > 3:
     open(sys.argv[3], "w").write(str(os.getpid()))
@@ -279,9 +279,9 @@ NUM_NODES=${num_nodes}
 PROXY_RAY_PORT=\$(python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()")
 PROXY_DASH_PORT=\$(python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()")
 
-python3 -c "${PROXY_PY_CODE}" \${PROXY_RAY_PORT} "localhost:${tunnel_ray_port}" "\${WORK}/.proxy_ray_pid" &
+python3 -c '${PROXY_PY_CODE}' \${PROXY_RAY_PORT} "localhost:${tunnel_ray_port}" "\${WORK}/.proxy_ray_pid" &
 sleep 0.5
-python3 -c "${PROXY_PY_CODE}" \${PROXY_DASH_PORT} "localhost:${tunnel_dashboard_port}" "\${WORK}/.proxy_dash_pid" &
+python3 -c '${PROXY_PY_CODE}' \${PROXY_DASH_PORT} "localhost:${tunnel_dashboard_port}" "\${WORK}/.proxy_dash_pid" &
 sleep 0.5
 
 echo "Login node proxies:"
@@ -462,12 +462,12 @@ for j in \$(seq 0 \$((\${NUM_NODES} - 1))); do
     echo "  Node \${j} (\${NODE_HOST}): proxying ports \${MY_MIN_PORT}-\${MY_MAX_PORT}, \${MY_RAYLET_PORT}, \${MY_OBJ_PORT}"
 
     # Proxy raylet port
-    python3 -c "${PROXY_PY_CODE}" \${MY_RAYLET_PORT} "\${NODE_HOST}:\${MY_RAYLET_PORT}" "\${WORK}/.proxy_fwd_\${j}_raylet.pid" &
+    python3 -c '${PROXY_PY_CODE}' \${MY_RAYLET_PORT} "\${NODE_HOST}:\${MY_RAYLET_PORT}" "\${WORK}/.proxy_fwd_\${j}_raylet.pid" &
     # Proxy object manager port
-    python3 -c "${PROXY_PY_CODE}" \${MY_OBJ_PORT} "\${NODE_HOST}:\${MY_OBJ_PORT}" "\${WORK}/.proxy_fwd_\${j}_obj.pid" &
+    python3 -c '${PROXY_PY_CODE}' \${MY_OBJ_PORT} "\${NODE_HOST}:\${MY_OBJ_PORT}" "\${WORK}/.proxy_fwd_\${j}_obj.pid" &
     # Proxy worker ports
     for port in \$(seq \${MY_MIN_PORT} \${MY_MAX_PORT}); do
-        python3 -c "${PROXY_PY_CODE}" \${port} "\${NODE_HOST}:\${port}" "\${WORK}/.proxy_fwd_\${j}_w\${port}.pid" &
+        python3 -c '${PROXY_PY_CODE}' \${port} "\${NODE_HOST}:\${port}" "\${WORK}/.proxy_fwd_\${j}_w\${port}.pid" &
     done
 done
 sleep 1
@@ -632,9 +632,8 @@ done
 WORKER_SCRIPT
     fi
 
-    local script_content
-    script_content=$(cat "${script_file}")
-    ssh "${SSH_ARGS[@]}" "${PW_USER}@${site_name}" "${script_content}" 2>&1 | \
+    # Pipe script via stdin to avoid quoting issues with SSH command strings
+    ssh "${SSH_ARGS[@]}" "${PW_USER}@${site_name}" 'bash -s' < "${script_file}" 2>&1 | \
         sed "s/^/[${site_id}] /"
 }
 
