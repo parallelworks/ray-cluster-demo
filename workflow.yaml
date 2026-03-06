@@ -39,6 +39,7 @@ jobs:
         run: |
           set -e
           export RAY_VERSION="${{ inputs.ray_settings.ray_version }}"
+          export TARGETS_JSON='${{ inputs.targets }}'
           bash scripts/start_ray_head.sh
 
   # =============================================================================
