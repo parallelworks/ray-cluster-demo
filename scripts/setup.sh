@@ -37,7 +37,15 @@ echo "System Python: ${PYTHON_CMD} ($(${PYTHON_CMD} --version 2>&1))"
 # Check if Ray is already installed at correct version in existing venv
 if [ -f "${VENV_DIR}/bin/python" ]; then
     INSTALLED_VERSION=$("${VENV_DIR}/bin/python" -c "import ray; print(ray.__version__)" 2>/dev/null || echo "")
-    if [ "${INSTALLED_VERSION}" == "${RAY_VERSION}" ]; then
+    INSTALLED_PYTHON=$("${VENV_DIR}/bin/python" -c "import platform; print(platform.python_version())" 2>/dev/null || echo "")
+    PYTHON_OK=true
+    if [ -n "${PYTHON_MICRO_VERSION}" ] && [ "${INSTALLED_PYTHON}" != "${PYTHON_MICRO_VERSION}" ]; then
+        echo "Python version mismatch: venv has ${INSTALLED_PYTHON}, need ${PYTHON_MICRO_VERSION}"
+        echo "Removing stale venv..."
+        rm -rf "${VENV_DIR}"
+        PYTHON_OK=false
+    fi
+    if [ "${PYTHON_OK}" = "true" ] && [ "${INSTALLED_VERSION}" == "${RAY_VERSION}" ]; then
         echo "Ray ${RAY_VERSION} already installed, skipping."
         touch "${JOB_DIR}/SETUP_COMPLETE"
         exit 0

@@ -143,7 +143,7 @@ dispatch_local_workers() {
 
     local site_id="site-1"  # Local workers are part of the head's site
 
-    echo "[${site_id}] Dispatching ${slurm_nodes} local SLURM worker(s) on ${site_name}"
+    echo "[${site_name}] Dispatching ${slurm_nodes} local SLURM worker(s) on ${site_name}"
 
     # Build srun command
     local srun_cmd="srun --nodes=${slurm_nodes} --ntasks=${slurm_nodes}"
@@ -152,7 +152,7 @@ dispatch_local_workers() {
     [ -n "${slurm_qos}" ] && srun_cmd="${srun_cmd} --qos=${slurm_qos}"
     [ -n "${slurm_time}" ] && srun_cmd="${srun_cmd} --time=${slurm_time}"
 
-    echo "[${site_id}] ${srun_cmd}"
+    echo "[${site_name}] ${srun_cmd}"
 
     # Write worker script to shared filesystem
     local script_file="${WORK_DIR}/worker_local_${site_index}.sh"
@@ -234,7 +234,7 @@ while true; do
 done
 WORKER_SCRIPT
 
-    ${srun_cmd} bash "${script_file}" 2>&1 | sed "s/^/[${site_id}] /" &
+    ${srun_cmd} bash "${script_file}" 2>&1 | sed "s/^/[${site_name}] /" &
 }
 
 # =============================================================================
@@ -264,7 +264,7 @@ dispatch_worker() {
     fi
 
     echo ""
-    echo "[${site_id}] Dispatching to ${site_name} (${site_ip}) [${dispatch_mode}, ${num_nodes} node(s)]"
+    echo "[${site_name}] Dispatching to ${site_name} (${site_ip}) [${dispatch_mode}, ${num_nodes} node(s)]"
 
     # Port allocation for N nodes
     # Tunnel IP: 127.0.(site_index+1).(node+1)
@@ -284,7 +284,7 @@ dispatch_worker() {
         NODE_MAX_PORTS+=($((base + 49)))
     done
 
-    echo "[${site_id}] Tunnel IPs: ${NODE_TUNNEL_IPS[*]}"
+    echo "[${site_name}] Tunnel IPs: ${NODE_TUNNEL_IPS[*]}"
 
     # Kill any stale SSH tunnels using the same forward tunnel ports (from prior runs)
     for j in $(seq 0 $((num_nodes - 1))); do
@@ -294,7 +294,7 @@ dispatch_worker() {
         local stale_pids
         stale_pids=$(ps aux 2>/dev/null | grep "ssh.*${stale_ip}:${stale_port}" | grep -v grep | awk '{print $2}' || true)
         if [ -n "${stale_pids}" ]; then
-            echo "[${site_id}] Killing stale SSH tunnels: ${stale_pids}"
+            echo "[${site_name}] Killing stale SSH tunnels: ${stale_pids}"
             echo "${stale_pids}" | xargs kill 2>/dev/null || true
             sleep 1
         fi
@@ -306,7 +306,7 @@ dispatch_worker() {
         'python3 -c "import socket; s=socket.socket(); s.bind((\"\",0)); print(s.getsockname()[1]); s.close()"' 2>/dev/null)
 
     if [ -z "${tunnel_dashboard_port}" ] || ! [[ "${tunnel_dashboard_port}" =~ ^[0-9]+$ ]]; then
-        echo "[${site_id}] [ERROR] Failed to allocate dashboard tunnel port (got: '${tunnel_dashboard_port}')"
+        echo "[${site_name}] [ERROR] Failed to allocate dashboard tunnel port (got: '${tunnel_dashboard_port}')"
         return 1
     fi
 
@@ -315,11 +315,11 @@ dispatch_worker() {
         'python3 -c "import socket; s=socket.socket(); s.bind((\"\",0)); print(s.getsockname()[1]); s.close()"' 2>/dev/null)
 
     if [ -z "${tunnel_ray_port}" ] || ! [[ "${tunnel_ray_port}" =~ ^[0-9]+$ ]]; then
-        echo "[${site_id}] [ERROR] Failed to allocate Ray tunnel port (got: '${tunnel_ray_port}')"
+        echo "[${site_name}] [ERROR] Failed to allocate Ray tunnel port (got: '${tunnel_ray_port}')"
         return 1
     fi
 
-    echo "[${site_id}] Remote tunnel ports: dashboard=${tunnel_dashboard_port} ray=${tunnel_ray_port}"
+    echo "[${site_name}] Remote tunnel ports: dashboard=${tunnel_dashboard_port} ray=${tunnel_ray_port}"
 
     # Write coordination file for this site
     echo "${site_name}" > "${JOB_DIR}/CLOUD_CLUSTER_NAME_${site_id}"
@@ -799,7 +799,7 @@ WORKER_SCRIPT
 
     # Pipe script via stdin to avoid quoting issues with SSH command strings
     ssh "${SSH_ARGS[@]}" "${PW_USER}@${site_name}" 'bash -s' < "${script_file}" 2>&1 | \
-        sed "s/^/[${site_id}] /"
+        sed "s/^/[${site_name}] /"
 }
 
 # Launch all worker sites in parallel
