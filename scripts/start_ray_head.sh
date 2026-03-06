@@ -1,5 +1,5 @@
 #!/bin/bash
-# start_ray_head.sh — Start Ray head node + custom dashboard on on-prem
+# start_ray_head.sh — Start Ray head node + custom dashboard
 #
 # Creates coordination files:
 #   - HOSTNAME      — Dashboard hostname
@@ -8,15 +8,10 @@
 #   - job.started   — Signals job has started
 #
 # Environment variables:
-#   RAY_VERSION - Ray version to install (default: 2.40.0)
+#   RAY_VERSION  - Ray version to install (default: 2.40.0)
+#   TARGETS_JSON - JSON array of target objects (for scheduler config)
 
 set -e
-
-echo "=========================================="
-echo "Ray Head + Dashboard Starting: $(date)"
-echo "=========================================="
-echo "Hostname: $(hostname)"
-echo "Job dir:  ${PW_PARENT_JOB_DIR}"
 
 JOB_DIR="${PW_PARENT_JOB_DIR%/}"
 cd "${JOB_DIR}"
@@ -24,6 +19,99 @@ cd "${JOB_DIR}"
 SCRIPT_DIR="${JOB_DIR}/scripts"
 RAY_VERSION="${RAY_VERSION:-2.40.0}"
 RAY_PORT=6379
+
+# =============================================================================
+# SLURM detection: if first target has scheduler enabled, wrap with srun
+# =============================================================================
+if [ -z "${_RAY_HEAD_INSIDE_SRUN}" ] && [ -n "${TARGETS_JSON}" ]; then
+    # Parse scheduler config for first target (site 0)
+    PYTHON_CMD=""
+    for cmd in python3 python; do
+        command -v $cmd &>/dev/null && { PYTHON_CMD=$cmd; break; }
+    done
+
+    if [ -n "${PYTHON_CMD}" ]; then
+        SCHED_INFO=$(${PYTHON_CMD} -c "
+import json, os
+targets = json.loads(os.environ['TARGETS_JSON'])
+t = targets[0]
+res = t.get('resource', {})
+if isinstance(res, str):
+    res = {'name': res}
+use_scheduler = t.get('scheduler', False)
+if isinstance(use_scheduler, str):
+    use_scheduler = use_scheduler.lower() == 'true'
+scheduler_type = res.get('schedulerType', '')
+if use_scheduler and not scheduler_type:
+    scheduler_type = 'slurm'
+slurm = t.get('slurm', {}) or {}
+print('USE_SCHEDULER=' + str(use_scheduler).lower())
+print('SCHEDULER_TYPE=' + scheduler_type)
+print('SLURM_PARTITION=' + slurm.get('partition', ''))
+print('SLURM_ACCOUNT=' + slurm.get('account', ''))
+print('SLURM_QOS=' + slurm.get('qos', ''))
+print('SLURM_TIME=' + slurm.get('time', '00:05:00'))
+" 2>/dev/null) || true
+
+        if [ -n "${SCHED_INFO}" ]; then
+            eval "${SCHED_INFO}"
+        fi
+
+        if [ "${USE_SCHEDULER}" = "true" ] && [ "${SCHEDULER_TYPE}" = "slurm" ]; then
+            echo "=========================================="
+            echo "SLURM detected for site 0 — submitting via srun"
+            echo "=========================================="
+
+            # Run setup on login node first (installs Ray + dashboard deps)
+            echo "Running setup on login node..."
+            bash "${SCRIPT_DIR}/setup.sh"
+
+            # Install dashboard dependencies on login node too
+            VENV_DIR="${JOB_DIR}/.venv"
+            if [ -f "${VENV_DIR}/bin/python" ]; then
+                PY="${VENV_DIR}/bin/python"
+                source "${VENV_DIR}/bin/activate"
+            else
+                PY="python3"
+            fi
+            ${PY} -c "import fastapi" 2>/dev/null || {
+                echo "Installing dashboard dependencies..."
+                if command -v uv &>/dev/null || [ -x "$HOME/.local/bin/uv" ] || [ -x "$HOME/.cargo/bin/uv" ]; then
+                    UV_CMD=$(command -v uv 2>/dev/null || echo "$HOME/.local/bin/uv")
+                    [ -x "$UV_CMD" ] || UV_CMD="$HOME/.cargo/bin/uv"
+                    $UV_CMD pip install --python "${PY}" fastapi uvicorn websockets httpx 2>&1
+                else
+                    ${PY} -m pip install --quiet fastapi uvicorn websockets httpx 2>&1
+                fi
+            }
+
+            # Build srun command
+            srun_cmd="srun --nodes=1 --ntasks=1"
+            [ -n "${SLURM_PARTITION}" ] && srun_cmd="${srun_cmd} --partition=${SLURM_PARTITION}"
+            [ -n "${SLURM_ACCOUNT}" ] && srun_cmd="${srun_cmd} --account=${SLURM_ACCOUNT}"
+            [ -n "${SLURM_QOS}" ] && srun_cmd="${srun_cmd} --qos=${SLURM_QOS}"
+            [ -n "${SLURM_TIME}" ] && srun_cmd="${srun_cmd} --time=${SLURM_TIME}"
+
+            echo "Submitting: ${srun_cmd} bash scripts/start_ray_head.sh"
+
+            # Re-exec this script inside srun (skip the SLURM detection block)
+            export _RAY_HEAD_INSIDE_SRUN=1
+            export RAY_VERSION
+            export TARGETS_JSON
+            ${srun_cmd} bash "${SCRIPT_DIR}/start_ray_head.sh"
+            exit $?
+        fi
+    fi
+fi
+
+# =============================================================================
+# Main logic (runs on login node or compute node via srun)
+# =============================================================================
+echo "=========================================="
+echo "Ray Head + Dashboard Starting: $(date)"
+echo "=========================================="
+echo "Hostname: $(hostname)"
+echo "Job dir:  ${PW_PARENT_JOB_DIR}"
 
 # Verify scripts were checked out
 if [ ! -f "${SCRIPT_DIR}/dashboard.py" ]; then
