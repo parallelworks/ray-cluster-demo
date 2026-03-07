@@ -227,14 +227,74 @@ jobs:
           echo "  Ray head: ${RAY_HEAD_IP}:6379"
           echo "  Dashboard: ${DASHBOARD_URL}"
           echo ""
-          echo "The cluster will remain active until the workflow is cancelled."
           echo "See the dashboard for connection instructions."
           echo "=========================================="
 
-          # Keep alive — cluster_only mode stays running until user cancels
-          while true; do
-            sleep 30
-          done
+          # Run user script if provided
+          USER_SCRIPT_CONTENT='${{ inputs.workload_settings.user_script }}'
+          SCRIPT_TYPE='${{ inputs.workload_settings.script_type }}'
+          KEEP_ALIVE='${{ inputs.workload_settings.keep_alive }}'
+
+          if [ -n "${USER_SCRIPT_CONTENT}" ]; then
+            echo "User script provided — preparing to execute..."
+
+            curl -s -X POST "${DASHBOARD_URL}/api/phase" \
+              -H "Content-Type: application/json" \
+              -d '{"phase": "user_script"}'
+
+            JOB_DIR="${PW_PARENT_JOB_DIR}"
+            if [ "${SCRIPT_TYPE}" = "python" ]; then
+              SCRIPT_FILE="${JOB_DIR}/user_script.py"
+            else
+              SCRIPT_FILE="${JOB_DIR}/user_script.sh"
+            fi
+
+            cat > "${SCRIPT_FILE}" << 'USERSCRIPT_EOF'
+          ${{ inputs.workload_settings.user_script }}
+          USERSCRIPT_EOF
+
+            # Activate the venv and set Ray address
+            VENV_DIR="${JOB_DIR%/}/.venv"
+            [ -f "${VENV_DIR}/bin/activate" ] && source "${VENV_DIR}/bin/activate"
+            export RAY_ADDRESS="${RAY_HEAD_IP}:6379"
+
+            echo "Running user script (${SCRIPT_TYPE})..."
+            if [ "${SCRIPT_TYPE}" = "python" ]; then
+              if python3 "${SCRIPT_FILE}"; then
+                echo "User script completed successfully."
+                curl -s -X POST "${DASHBOARD_URL}/api/phase" \
+                  -H "Content-Type: application/json" \
+                  -d '{"phase": "complete"}'
+              else
+                echo "ERROR: User script failed with exit code $?"
+                curl -s -X POST "${DASHBOARD_URL}/api/phase" \
+                  -H "Content-Type: application/json" \
+                  -d '{"phase": "script_failed"}'
+              fi
+            else
+              if bash "${SCRIPT_FILE}"; then
+                echo "User script completed successfully."
+                curl -s -X POST "${DASHBOARD_URL}/api/phase" \
+                  -H "Content-Type: application/json" \
+                  -d '{"phase": "complete"}'
+              else
+                echo "ERROR: User script failed with exit code $?"
+                curl -s -X POST "${DASHBOARD_URL}/api/phase" \
+                  -H "Content-Type: application/json" \
+                  -d '{"phase": "script_failed"}'
+              fi
+            fi
+          fi
+
+          # Keep alive or exit
+          if [ "${KEEP_ALIVE}" = "true" ] || [ -z "${USER_SCRIPT_CONTENT}" ]; then
+            echo "The cluster will remain active until the workflow is cancelled."
+            while true; do
+              sleep 30
+            done
+          else
+            echo "keep_alive is false — workflow will terminate."
+          fi
 
   # =============================================================================
   # COMPLETE — Print summary
@@ -376,10 +436,47 @@ jobs:
                 default: ${{ inputs.workers.[index].resource.schedulerType != 'pbs' || inputs.workers.[index].scheduler == false }}
                 ignore: ${{ inputs.workers.[index].resource.schedulerType != 'pbs' || inputs.workers.[index].scheduler == false }}
 
+              queue:
+                label: Queue
+                type: string
+                optional: true
+                tooltip: PBS queue name (-q). Leave empty to use the default queue.
+                ignore: ${{ inputs.workers.[index].resource.schedulerType != 'pbs' || inputs.workers.[index].scheduler == false }}
+
+              account:
+                label: Account
+                type: string
+                optional: true
+                tooltip: PBS account/project (-A)
+                ignore: ${{ inputs.workers.[index].resource.schedulerType != 'pbs' || inputs.workers.[index].scheduler == false }}
+
+              nodes:
+                label: Nodes
+                type: dropdown
+                default: "1"
+                tooltip: Number of compute nodes to request. Each node runs a Ray worker.
+                options:
+                  - value: "1"
+                    label: "1 node"
+                  - value: "2"
+                    label: "2 nodes"
+                  - value: "4"
+                    label: "4 nodes"
+                  - value: "8"
+                    label: "8 nodes"
+                ignore: ${{ inputs.workers.[index].resource.schedulerType != 'pbs' || inputs.workers.[index].scheduler == false }}
+
+              walltime:
+                label: Walltime
+                type: string
+                default: "01:00:00"
+                tooltip: "PBS walltime (HH:MM:SS). Workers terminate when this expires. Use a longer walltime for cluster_only mode or large workloads."
+                ignore: ${{ inputs.workers.[index].resource.schedulerType != 'pbs' || inputs.workers.[index].scheduler == false }}
+
               scheduler_directives:
-                label: PBS Directives
+                label: Additional Directives
                 type: editor
-                tooltip: Type PBS scheduler directives
+                tooltip: Additional PBS directives (one per line, e.g. #PBS -l mem=16gb)
                 optional: true
                 ignore: ${{ inputs.workers.[index].resource.schedulerType != 'pbs' || inputs.workers.[index].scheduler == false }}
 
@@ -426,6 +523,34 @@ jobs:
                 label: "Mathematical Benchmark"
               - value: cluster_only
                 label: "Cluster Only (no demo workload)"
+
+          user_script:
+            type: editor
+            label: User Script
+            tooltip: "Optional script to run after the cluster is ready. Runs on the head node with Ray pre-configured. Leave empty to just deploy the cluster."
+            optional: true
+            hidden: ${{ inputs.workload_settings.workload_type != 'cluster_only' }}
+            ignore: ${{ inputs.workload_settings.workload_type != 'cluster_only' }}
+
+          script_type:
+            type: dropdown
+            label: Script Type
+            default: bash
+            hidden: ${{ inputs.workload_settings.workload_type != 'cluster_only' }}
+            ignore: ${{ inputs.workload_settings.workload_type != 'cluster_only' }}
+            options:
+              - value: bash
+                label: Bash
+              - value: python
+                label: Python
+
+          keep_alive:
+            type: boolean
+            label: Keep Cluster Alive After Script
+            default: true
+            tooltip: "Keep the cluster running after the script completes. Uncheck to terminate the workflow when the script finishes."
+            hidden: ${{ inputs.workload_settings.workload_type != 'cluster_only' }}
+            ignore: ${{ inputs.workload_settings.workload_type != 'cluster_only' }}
 
           grid_size:
             type: dropdown

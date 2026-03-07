@@ -508,6 +508,10 @@ python my_script.py</pre>
               <td style="padding: 0.4rem 0; color: var(--dim);">Connected Workers</td>
               <td id="info-worker-count" style="padding: 0.4rem 0; font-family: monospace;">0</td>
             </tr>
+            <tr>
+              <td style="padding: 0.4rem 0; color: var(--dim);">Total GPUs</td>
+              <td id="info-gpu-count" style="padding: 0.4rem 0; font-family: monospace;">0</td>
+            </tr>
           </table>
         </div>
       </div>
@@ -718,6 +722,9 @@ function updateClusterOnlyInfo() {
   document.getElementById('info-ray-head-ip').textContent = headIp;
   const workerCount = Object.keys(rayNodes).length;
   document.getElementById('info-worker-count').textContent = workerCount;
+  let totalGpus = 0;
+  Object.values(rayNodes).forEach(n => { totalGpus += (n.num_gpus || 0); });
+  document.getElementById('info-gpu-count').textContent = totalGpus;
 
   // Substitute real values into code blocks
   const sshCmd = document.getElementById('ssh-tunnel-cmd');
@@ -1013,13 +1020,15 @@ function drawTopology() {
           g.lineWidth = 1.5;
           g.stroke();
 
-          // CPU count in node
+          // CPU and GPU count in node
           const cpus = nodeData.num_cpus || '?';
+          const gpus = nodeData.num_gpus || 0;
+          const nodeLabel = gpus > 0 ? cpus + ' CPU, ' + gpus + ' GPU' : cpus + ' CPU';
           g.fillStyle = color + 'cc';
           g.font = '8px Inter, system-ui, sans-serif';
           g.textAlign = 'center';
           g.textBaseline = 'middle';
-          g.fillText(cpus + ' CPU', nx, nodesY);
+          g.fillText(nodeLabel, nx, nodesY);
         });
 
         // Summary below nodes
@@ -1237,6 +1246,8 @@ function updateStats() {
     scaling: 'Scaling Test',
     rendering: 'Rendering',
     cluster_ready: 'Cluster Ready',
+    user_script: 'Running User Script...',
+    script_failed: 'Script Failed',
     complete: 'Complete',
   };
   if (phase === 'waiting' && Object.keys(pendingSites).length > 0 && Object.keys(siteStats).length === 0) {
@@ -1251,6 +1262,12 @@ function updateStats() {
   } else if (phase === 'cluster_ready') {
     badge.className = 'status-badge running';
     badge.innerHTML = '<div class="pulse" style="background:var(--green)"></div> ' + (phaseLabels[phase] || phase);
+  } else if (phase === 'user_script') {
+    badge.className = 'status-badge running';
+    badge.innerHTML = '<div class="pulse" style="background:currentColor"></div> ' + (phaseLabels[phase] || phase);
+  } else if (phase === 'script_failed') {
+    badge.className = 'status-badge error';
+    badge.innerHTML = '<div class="pulse" style="background:var(--red, #e74c3c)"></div> ' + (phaseLabels[phase] || phase);
   } else {
     badge.className = 'status-badge running';
     badge.innerHTML = '<div class="pulse" style="background:currentColor"></div> ' + (phaseLabels[phase] || phase);

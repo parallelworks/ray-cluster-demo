@@ -22,12 +22,12 @@ TEMPLATE_DIR = Path(__file__).parent / "templates"
 # In-memory state
 state = {
     # Cluster topology
-    "nodes": {},          # node_ip -> {site_id, num_cpus, cluster_name, scheduler_type, joined_at}
+    "nodes": {},          # node_ip -> {site_id, num_cpus, num_gpus, cluster_name, scheduler_type, joined_at}
     "ray_head_ip": os.environ.get("RAY_HEAD_IP", ""),
     "head_node": {},      # {ip, cluster_name, scheduler_type} — coordinator, not a compute site
     # Workload
     "workload_type": "benchmark",  # "benchmark" or "fractal"
-    "phase": "waiting",   # waiting, throughput, compute, scaling, rendering, complete
+    "phase": "waiting",   # waiting, throughput, compute, scaling, rendering, cluster_ready, user_script, script_failed, complete
     "tasks": [],          # [{task_id, type, node_ip, site_id, duration_ms, result}]
     "total_planned": 0,
     "total_completed": 0,
@@ -51,7 +51,7 @@ connected_ws = []  # list of WebSocket
 def _reset_state():
     state["nodes"] = {}
     state["workload_type"] = "benchmark"  # "benchmark", "fractal", or "cluster_only"
-    state["phase"] = "waiting"  # waiting, throughput, compute, scaling, rendering, cluster_ready, complete
+    state["phase"] = "waiting"  # waiting, throughput, compute, scaling, rendering, cluster_ready, user_script, script_failed, complete
     state["tasks"] = []
     state["total_planned"] = 0
     state["total_completed"] = 0
@@ -174,6 +174,7 @@ async def register_worker(request: Request):
     state["nodes"][node_ip] = {
         "site_id": site_id,
         "num_cpus": body.get("num_cpus", 1),
+        "num_gpus": body.get("num_gpus", 0),
         "cluster_name": body.get("cluster_name", ""),
         "scheduler_type": body.get("scheduler_type", ""),
         "joined_at": time.time(),
@@ -206,6 +207,7 @@ async def register_worker(request: Request):
         "node_ip": node_ip,
         "site_id": site_id,
         "num_cpus": body.get("num_cpus", 1),
+        "num_gpus": body.get("num_gpus", 0),
         "cluster_name": body.get("cluster_name", ""),
         "scheduler_type": body.get("scheduler_type", ""),
         "nodes": state["nodes"],
@@ -245,6 +247,7 @@ async def receive_task(request: Request):
         state["nodes"][node_ip] = {
             "site_id": site_id,
             "num_cpus": 1,
+            "num_gpus": 0,
             "cluster_name": task.get("cluster_name", ""),
             "scheduler_type": task.get("scheduler_type", ""),
             "joined_at": now,
@@ -323,6 +326,7 @@ async def receive_tile(request: Request):
         state["nodes"][node_ip] = {
             "site_id": site_id,
             "num_cpus": 1,
+            "num_gpus": 0,
             "cluster_name": tile.get("cluster_name", ""),
             "scheduler_type": tile.get("scheduler_type", ""),
             "joined_at": now,
