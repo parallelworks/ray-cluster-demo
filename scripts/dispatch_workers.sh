@@ -794,15 +794,45 @@ if [ -z "\${PW_REMOTE}" ]; then
 fi
 
 echo "Creating tunnel to head node (${HEAD_RESOURCE_NAME})..."
-\${PW_REMOTE} ssh -L ${tunnel_ray_port}:localhost:${RAY_PORT} \
+# Try real SSH with PW proxy-command for reliable -L port forwarding
+# (pw ssh -L may not forward TCP data through the PW proxy)
+TUNNEL_LOG="\${WORK}/.tunnel_ssh.log"
+ssh -i ~/.ssh/pwcli \
+    -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    -o "ProxyCommand=\${PW_REMOTE} ssh --proxy-command ${HEAD_RESOURCE_NAME}" \
+    -o ServerAliveInterval=15 \
+    -o ServerAliveCountMax=120 \
+    -N \
+    -L ${tunnel_ray_port}:localhost:${RAY_PORT} \
     -L ${tunnel_dashboard_port}:localhost:${DASHBOARD_PORT} \
-    ${HEAD_RESOURCE_NAME} "sleep 86400" </dev/null &
+    \${USER}@${HEAD_RESOURCE_NAME} </dev/null >\${TUNNEL_LOG} 2>&1 &
 PW_TUNNEL_PID=\$!
 echo \${PW_TUNNEL_PID} > "\${WORK}/.pw_tunnel.pid"
-sleep 10
+sleep 5
+
+if ! kill -0 \${PW_TUNNEL_PID} 2>/dev/null; then
+    echo "[WARN] SSH tunnel exited. Log:"
+    cat \${TUNNEL_LOG} 2>/dev/null || true
+    echo "Falling back to pw ssh -L..."
+    \${PW_REMOTE} ssh -L ${tunnel_ray_port}:localhost:${RAY_PORT} \
+        -L ${tunnel_dashboard_port}:localhost:${DASHBOARD_PORT} \
+        ${HEAD_RESOURCE_NAME} "sleep 86400" </dev/null >\${TUNNEL_LOG} 2>&1 &
+    PW_TUNNEL_PID=\$!
+    echo \${PW_TUNNEL_PID} > "\${WORK}/.pw_tunnel.pid"
+    sleep 10
+fi
+echo "Tunnel PID \${PW_TUNNEL_PID} alive: \$(kill -0 \${PW_TUNNEL_PID} 2>/dev/null && echo yes || echo no)"
 
 # Verify tunnel to head works
 echo "Verifying tunnel to head node..."
+# Diagnostic: show tunnel log and check if port is bound
+echo "--- tunnel log ---"
+cat \${TUNNEL_LOG} 2>/dev/null || true
+echo "--- end tunnel log ---"
+ss -tlnp 2>/dev/null | grep ":${tunnel_ray_port} " || \
+    netstat -tlnp 2>/dev/null | grep ":${tunnel_ray_port}" || \
+    echo "  Port ${tunnel_ray_port} not yet in listen state"
 TUNNEL_OK=false
 for t_attempt in \$(seq 1 60); do
     if ! kill -0 \${PW_TUNNEL_PID} 2>/dev/null; then
@@ -830,8 +860,11 @@ except:
 done
 
 if [ "\${TUNNEL_OK}" != "true" ]; then
-    echo "[ERROR] Cannot reach head node through pw ssh tunnel"
-    echo "  Tried: \${PW_REMOTE} ssh -L ${tunnel_ray_port}:localhost:${RAY_PORT} ${HEAD_RESOURCE_NAME}"
+    echo "[ERROR] Cannot reach head node through tunnel on port ${tunnel_ray_port}"
+    echo "--- final tunnel log ---"
+    cat \${TUNNEL_LOG} 2>/dev/null || true
+    echo "--- end ---"
+    ss -tlnp 2>/dev/null | grep ":${tunnel_ray_port}" || echo "  Port ${tunnel_ray_port} still not listening"
     kill \${PW_TUNNEL_PID} 2>/dev/null || true
     kill \${SRUN_PID} 2>/dev/null || true
     exit 1
@@ -953,15 +986,45 @@ if [ -z "\${PW_REMOTE}" ]; then
 fi
 
 echo "Creating tunnel to head node (${HEAD_RESOURCE_NAME})..."
-\${PW_REMOTE} ssh -L ${tunnel_ray_port}:localhost:${RAY_PORT} \
+# Try real SSH with PW proxy-command for reliable -L port forwarding
+# (pw ssh -L may not forward TCP data through the PW proxy)
+TUNNEL_LOG="\${WORK}/.tunnel_ssh.log"
+ssh -i ~/.ssh/pwcli \
+    -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    -o "ProxyCommand=\${PW_REMOTE} ssh --proxy-command ${HEAD_RESOURCE_NAME}" \
+    -o ServerAliveInterval=15 \
+    -o ServerAliveCountMax=120 \
+    -N \
+    -L ${tunnel_ray_port}:localhost:${RAY_PORT} \
     -L ${tunnel_dashboard_port}:localhost:${DASHBOARD_PORT} \
-    ${HEAD_RESOURCE_NAME} "sleep 86400" </dev/null &
+    \${USER}@${HEAD_RESOURCE_NAME} </dev/null >\${TUNNEL_LOG} 2>&1 &
 PW_TUNNEL_PID=\$!
 echo \${PW_TUNNEL_PID} > "\${WORK}/.pw_tunnel.pid"
-sleep 10
+sleep 5
+
+if ! kill -0 \${PW_TUNNEL_PID} 2>/dev/null; then
+    echo "[WARN] SSH tunnel exited. Log:"
+    cat \${TUNNEL_LOG} 2>/dev/null || true
+    echo "Falling back to pw ssh -L..."
+    \${PW_REMOTE} ssh -L ${tunnel_ray_port}:localhost:${RAY_PORT} \
+        -L ${tunnel_dashboard_port}:localhost:${DASHBOARD_PORT} \
+        ${HEAD_RESOURCE_NAME} "sleep 86400" </dev/null >\${TUNNEL_LOG} 2>&1 &
+    PW_TUNNEL_PID=\$!
+    echo \${PW_TUNNEL_PID} > "\${WORK}/.pw_tunnel.pid"
+    sleep 10
+fi
+echo "Tunnel PID \${PW_TUNNEL_PID} alive: \$(kill -0 \${PW_TUNNEL_PID} 2>/dev/null && echo yes || echo no)"
 
 # Verify tunnel to head works
 echo "Verifying tunnel to head node..."
+# Diagnostic: show tunnel log and check if port is bound
+echo "--- tunnel log ---"
+cat \${TUNNEL_LOG} 2>/dev/null || true
+echo "--- end tunnel log ---"
+ss -tlnp 2>/dev/null | grep ":${tunnel_ray_port} " || \
+    netstat -tlnp 2>/dev/null | grep ":${tunnel_ray_port}" || \
+    echo "  Port ${tunnel_ray_port} not yet in listen state"
 TUNNEL_OK=false
 for t_attempt in \$(seq 1 60); do
     # Check if pw ssh process is still alive
@@ -990,7 +1053,11 @@ except:
 done
 
 if [ "\${TUNNEL_OK}" != "true" ]; then
-    echo "[ERROR] Cannot reach head node through pw ssh tunnel"
+    echo "[ERROR] Cannot reach head node through tunnel on port ${tunnel_ray_port}"
+    echo "--- final tunnel log ---"
+    cat \${TUNNEL_LOG} 2>/dev/null || true
+    echo "--- end ---"
+    ss -tlnp 2>/dev/null | grep ":${tunnel_ray_port}" || echo "  Port ${tunnel_ray_port} still not listening"
     kill \${PW_TUNNEL_PID} 2>/dev/null || true
     exit 1
 fi
@@ -1327,15 +1394,45 @@ if [ -z "\${PW_REMOTE}" ]; then
 fi
 
 echo "Creating tunnel to head node (${HEAD_RESOURCE_NAME})..."
-\${PW_REMOTE} ssh -L ${tunnel_ray_port}:localhost:${RAY_PORT} \
+# Try real SSH with PW proxy-command for reliable -L port forwarding
+# (pw ssh -L may not forward TCP data through the PW proxy)
+TUNNEL_LOG="\${WORK}/.tunnel_ssh.log"
+ssh -i ~/.ssh/pwcli \
+    -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null \
+    -o "ProxyCommand=\${PW_REMOTE} ssh --proxy-command ${HEAD_RESOURCE_NAME}" \
+    -o ServerAliveInterval=15 \
+    -o ServerAliveCountMax=120 \
+    -N \
+    -L ${tunnel_ray_port}:localhost:${RAY_PORT} \
     -L ${tunnel_dashboard_port}:localhost:${DASHBOARD_PORT} \
-    ${HEAD_RESOURCE_NAME} "sleep 86400" </dev/null &
+    \${USER}@${HEAD_RESOURCE_NAME} </dev/null >\${TUNNEL_LOG} 2>&1 &
 PW_TUNNEL_PID=\$!
 echo \${PW_TUNNEL_PID} > "\${WORK}/.pw_tunnel.pid"
-sleep 10
+sleep 5
+
+if ! kill -0 \${PW_TUNNEL_PID} 2>/dev/null; then
+    echo "[WARN] SSH tunnel exited. Log:"
+    cat \${TUNNEL_LOG} 2>/dev/null || true
+    echo "Falling back to pw ssh -L..."
+    \${PW_REMOTE} ssh -L ${tunnel_ray_port}:localhost:${RAY_PORT} \
+        -L ${tunnel_dashboard_port}:localhost:${DASHBOARD_PORT} \
+        ${HEAD_RESOURCE_NAME} "sleep 86400" </dev/null >\${TUNNEL_LOG} 2>&1 &
+    PW_TUNNEL_PID=\$!
+    echo \${PW_TUNNEL_PID} > "\${WORK}/.pw_tunnel.pid"
+    sleep 10
+fi
+echo "Tunnel PID \${PW_TUNNEL_PID} alive: \$(kill -0 \${PW_TUNNEL_PID} 2>/dev/null && echo yes || echo no)"
 
 # Verify tunnel to head works
 echo "Verifying tunnel to head node..."
+# Diagnostic: show tunnel log and check if port is bound
+echo "--- tunnel log ---"
+cat \${TUNNEL_LOG} 2>/dev/null || true
+echo "--- end tunnel log ---"
+ss -tlnp 2>/dev/null | grep ":${tunnel_ray_port} " || \
+    netstat -tlnp 2>/dev/null | grep ":${tunnel_ray_port}" || \
+    echo "  Port ${tunnel_ray_port} not yet in listen state"
 TUNNEL_OK=false
 for t_attempt in \$(seq 1 60); do
     # Check if pw ssh process is still alive
@@ -1364,7 +1461,11 @@ except:
 done
 
 if [ "\${TUNNEL_OK}" != "true" ]; then
-    echo "[ERROR] Cannot reach head node through pw ssh tunnel"
+    echo "[ERROR] Cannot reach head node through tunnel on port ${tunnel_ray_port}"
+    echo "--- final tunnel log ---"
+    cat \${TUNNEL_LOG} 2>/dev/null || true
+    echo "--- end ---"
+    ss -tlnp 2>/dev/null | grep ":${tunnel_ray_port}" || echo "  Port ${tunnel_ray_port} still not listening"
     kill \${PW_TUNNEL_PID} 2>/dev/null || true
     exit 1
 fi
