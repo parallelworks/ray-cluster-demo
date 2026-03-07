@@ -110,6 +110,54 @@ async def _broadcast(msg_dict):
         connected_ws.remove(ws)
 
 
+# ---------------------------------------------------------------------------
+# Background poller — fetch node & job info from Ray's built-in dashboard API
+# so the custom dashboard reflects cluster activity even for user-submitted jobs.
+# ---------------------------------------------------------------------------
+state["ray_jobs"] = []  # [{job_id, status, ...}]
+
+async def _poll_ray_api():
+    """Periodically poll Ray's REST API for cluster nodes and jobs."""
+    while True:
+        try:
+            # Fetch nodes
+            resp = await _ray_client.get("/nodes?view=summary")
+            if resp.status_code == 200:
+                data = resp.json()
+                nodes_summary = data.get("data", {}).get("summary", [])
+                ray_info = []
+                for node in nodes_summary:
+                    ray_info.append({
+                        "node_id": node.get("nodeId", ""),
+                        "ip": node.get("ip", ""),
+                        "hostname": node.get("hostname", ""),
+                        "state": node.get("state", ""),
+                        "cpus": node.get("numCpus", 0) if isinstance(node.get("numCpus"), (int, float)) else 0,
+                        "gpus": node.get("numGpus", 0) if isinstance(node.get("numGpus"), (int, float)) else 0,
+                        "alive": node.get("state", "") == "ALIVE",
+                    })
+                state["ray_cluster_nodes"] = ray_info
+
+            # Fetch jobs
+            resp = await _ray_client.get("/api/jobs/")
+            if resp.status_code == 200:
+                jobs = resp.json()
+                # Keep recent jobs (last 20)
+                if isinstance(jobs, list):
+                    state["ray_jobs"] = sorted(
+                        jobs, key=lambda j: j.get("start_time", 0) or 0, reverse=True
+                    )[:20]
+
+            await _broadcast({"type": "ray_cluster", "ray_cluster_nodes": state.get("ray_cluster_nodes", []), "ray_jobs": state["ray_jobs"]})
+        except Exception:
+            pass  # Ray dashboard may not be up yet
+        await asyncio.sleep(5)
+
+@app.on_event("startup")
+async def start_poller():
+    asyncio.create_task(_poll_ray_api())
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return (TEMPLATE_DIR / "index.html").read_text()
@@ -411,6 +459,8 @@ async def get_state():
         "elapsed_s": round(time.time() - state["start_time"], 1) if state["start_time"] else 0,
         "throughput_history": _compute_throughput_history(),
         "pending_sites": state["pending_sites"],
+        "ray_cluster_nodes": state.get("ray_cluster_nodes", []),
+        "ray_jobs": state.get("ray_jobs", []),
     }
     if state["workload_type"] == "fractal":
         result["grid_size"] = state["grid_size"]
@@ -465,6 +515,8 @@ async def websocket_endpoint(ws: WebSocket):
             "grid_size": state["grid_size"],
             "image_size": state["image_size"],
             "pending_sites": state["pending_sites"],
+            "ray_cluster_nodes": state.get("ray_cluster_nodes", []),
+            "ray_jobs": state.get("ray_jobs", []),
         }))
         while True:
             await ws.receive_text()
