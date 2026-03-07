@@ -608,6 +608,23 @@ python my_script.py</pre>
       </div>
     </div>
 
+    <!-- Ray Cluster Activity (polled from Ray API) -->
+    <div class="card" id="ray-activity-card">
+      <div class="card-title">Cluster Activity</div>
+      <div style="margin-bottom: 0.75rem;">
+        <div style="color: var(--dim); font-size: 0.72rem; font-weight: 600; margin-bottom: 0.3rem; text-transform: uppercase; letter-spacing: 0.05em;">Nodes</div>
+        <div id="ray-nodes-sidebar" style="font-size: 0.8rem;">
+          <span style="color: var(--dim);">Polling...</span>
+        </div>
+      </div>
+      <div>
+        <div style="color: var(--dim); font-size: 0.72rem; font-weight: 600; margin-bottom: 0.3rem; text-transform: uppercase; letter-spacing: 0.05em;">Recent Jobs</div>
+        <div id="ray-jobs-sidebar" style="font-size: 0.8rem;">
+          <span style="color: var(--dim);">No jobs yet</span>
+        </div>
+      </div>
+    </div>
+
     <!-- Benchmark Results (hidden in fractal mode) -->
     <div class="card" id="results-card" style="display:none">
       <div class="card-title">Benchmark Results</div>
@@ -785,16 +802,20 @@ function updateClusterOnlyInfo() {
 
 // --- Ray cluster activity rendering ---
 function renderRayClusterActivity(nodes, jobs) {
-  const nodesEl = document.getElementById('ray-nodes-list');
-  const jobsEl = document.getElementById('ray-jobs-list');
-  if (!nodesEl || !jobsEl) return;
+  const aliveNodes = (nodes || []).filter(n => n.alive);
 
-  // Render nodes
-  const aliveNodes = nodes.filter(n => n.alive);
-  if (aliveNodes.length === 0) {
-    nodesEl.innerHTML = '<span style="color: var(--dim);">No nodes detected</span>';
-  } else {
-    nodesEl.innerHTML = '<table style="width: 100%; border-collapse: collapse;">' +
+  const statusColor = s => {
+    if (s === 'SUCCEEDED') return 'var(--accent)';
+    if (s === 'RUNNING') return '#f0c040';
+    if (s === 'FAILED') return '#e06060';
+    if (s === 'PENDING') return 'var(--dim)';
+    return 'var(--dim)';
+  };
+
+  // Build nodes HTML (full table for main view, compact for sidebar)
+  const nodesTableHtml = aliveNodes.length === 0
+    ? '<span style="color: var(--dim);">No nodes detected</span>'
+    : '<table style="width: 100%; border-collapse: collapse;">' +
       '<tr style="color: var(--dim); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">' +
       '<td style="padding: 0.3rem 0.5rem;">Hostname</td><td style="padding: 0.3rem 0.5rem;">IP</td>' +
       '<td style="padding: 0.3rem 0.5rem;">CPUs</td><td style="padding: 0.3rem 0.5rem;">GPUs</td></tr>' +
@@ -805,20 +826,19 @@ function renderRayClusterActivity(nodes, jobs) {
         '<td style="padding: 0.3rem 0.5rem; color: var(--text);">' + (n.cpus || 0) + '</td>' +
         '<td style="padding: 0.3rem 0.5rem; color: var(--text);">' + (n.gpus || 0) + '</td></tr>'
       ).join('') + '</table>';
-  }
 
-  // Render jobs
-  if (!jobs || jobs.length === 0) {
-    jobsEl.innerHTML = '<span style="color: var(--dim);">No jobs submitted yet</span>';
-  } else {
-    const statusColor = s => {
-      if (s === 'SUCCEEDED') return 'var(--accent)';
-      if (s === 'RUNNING') return '#f0c040';
-      if (s === 'FAILED') return '#e06060';
-      if (s === 'PENDING') return 'var(--dim)';
-      return 'var(--dim)';
-    };
-    jobsEl.innerHTML = '<table style="width: 100%; border-collapse: collapse;">' +
+  const nodesSidebarHtml = aliveNodes.length === 0
+    ? '<span style="color: var(--dim);">No nodes</span>'
+    : aliveNodes.map(n =>
+        '<div style="padding: 0.15rem 0; color: var(--text);">' +
+        (n.hostname || n.ip || '-') +
+        ' <span style="color: var(--dim);">' + (n.cpus || 0) + ' CPU' + (n.gpus > 0 ? ', ' + n.gpus + ' GPU' : '') + '</span></div>'
+      ).join('');
+
+  // Build jobs HTML
+  const jobsTableHtml = (!jobs || jobs.length === 0)
+    ? '<span style="color: var(--dim);">No jobs submitted yet</span>'
+    : '<table style="width: 100%; border-collapse: collapse;">' +
       '<tr style="color: var(--dim); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">' +
       '<td style="padding: 0.3rem 0.5rem;">Job ID</td><td style="padding: 0.3rem 0.5rem;">Status</td>' +
       '<td style="padding: 0.3rem 0.5rem;">Submitted</td></tr>' +
@@ -828,7 +848,6 @@ function renderRayClusterActivity(nodes, jobs) {
         const shortId = jobId.length > 20 ? jobId.slice(0, 20) + '...' : jobId;
         let timeStr = '-';
         if (j.start_time) {
-          // Ray start_time could be seconds or milliseconds — normalize
           const ts = j.start_time > 1e12 ? j.start_time : j.start_time * 1000;
           const d = new Date(ts);
           if (!isNaN(d.getTime())) timeStr = d.toLocaleTimeString();
@@ -838,7 +857,29 @@ function renderRayClusterActivity(nodes, jobs) {
           '<td style="padding: 0.3rem 0.5rem; color: ' + statusColor(status) + '; font-weight: 500;">' + status + '</td>' +
           '<td style="padding: 0.3rem 0.5rem; color: var(--dim);">' + timeStr + '</td></tr>';
       }).join('') + '</table>';
-  }
+
+  const jobsSidebarHtml = (!jobs || jobs.length === 0)
+    ? '<span style="color: var(--dim);">No jobs yet</span>'
+    : jobs.slice(0, 5).map(j => {
+        const status = j.status || 'UNKNOWN';
+        const jobId = j.submission_id || j.job_id || '-';
+        const shortId = jobId.length > 16 ? jobId.slice(0, 16) + '..' : jobId;
+        return '<div style="padding: 0.15rem 0; display: flex; justify-content: space-between;">' +
+          '<span style="color: var(--text); font-family: monospace; font-size: 0.75rem;">' + shortId + '</span>' +
+          '<span style="color: ' + statusColor(status) + '; font-size: 0.75rem; font-weight: 500;">' + status + '</span></div>';
+      }).join('');
+
+  // Update cluster-only view (full tables)
+  const nodesEl = document.getElementById('ray-nodes-list');
+  if (nodesEl) nodesEl.innerHTML = nodesTableHtml;
+  const jobsEl = document.getElementById('ray-jobs-list');
+  if (jobsEl) jobsEl.innerHTML = jobsTableHtml;
+
+  // Update sidebar (compact)
+  const nodesSb = document.getElementById('ray-nodes-sidebar');
+  if (nodesSb) nodesSb.innerHTML = nodesSidebarHtml;
+  const jobsSb = document.getElementById('ray-jobs-sidebar');
+  if (jobsSb) jobsSb.innerHTML = jobsSidebarHtml;
 }
 
 // --- Chart label updates ---
