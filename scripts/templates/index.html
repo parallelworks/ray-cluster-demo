@@ -536,6 +536,27 @@ python my_script.py</pre>
         </div>
       </details>
 
+      <!-- Ray Cluster Activity (live from Ray API) -->
+      <div style="background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem 2rem; margin-bottom: 1rem;">
+        <div class="card-title" style="font-size: 1rem; margin-bottom: 0.75rem;">Cluster Activity</div>
+
+        <!-- Nodes -->
+        <div style="margin-bottom: 1rem;">
+          <div style="color: var(--dim); font-size: 0.8rem; font-weight: 600; margin-bottom: 0.4rem; text-transform: uppercase; letter-spacing: 0.05em;">Nodes</div>
+          <div id="ray-nodes-list" style="font-size: 0.82rem;">
+            <span style="color: var(--dim);">Waiting for cluster data...</span>
+          </div>
+        </div>
+
+        <!-- Jobs -->
+        <div>
+          <div style="color: var(--dim); font-size: 0.8rem; font-weight: 600; margin-bottom: 0.4rem; text-transform: uppercase; letter-spacing: 0.05em;">Recent Jobs</div>
+          <div id="ray-jobs-list" style="font-size: 0.82rem;">
+            <span style="color: var(--dim);">No jobs submitted yet</span>
+          </div>
+        </div>
+      </div>
+
     </div>
   </div>
 
@@ -759,6 +780,62 @@ function updateClusterOnlyInfo() {
   const directCmd = document.getElementById('direct-cmd');
   if (directCmd && headIp !== '-') {
     directCmd.textContent = `# SSH to the head node\npw ssh workspace\n\n# Activate the Ray environment\nsource ~/pw/software/ray-*/bin/activate\n\n# Set the Ray address\nexport RAY_ADDRESS="${headIp}:6379"\n\n# Run your script\npython my_script.py`;
+  }
+}
+
+// --- Ray cluster activity rendering ---
+function renderRayClusterActivity(nodes, jobs) {
+  const nodesEl = document.getElementById('ray-nodes-list');
+  const jobsEl = document.getElementById('ray-jobs-list');
+  if (!nodesEl || !jobsEl) return;
+
+  // Render nodes
+  const aliveNodes = nodes.filter(n => n.alive);
+  if (aliveNodes.length === 0) {
+    nodesEl.innerHTML = '<span style="color: var(--dim);">No nodes detected</span>';
+  } else {
+    nodesEl.innerHTML = '<table style="width: 100%; border-collapse: collapse;">' +
+      '<tr style="color: var(--dim); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">' +
+      '<td style="padding: 0.3rem 0.5rem;">Hostname</td><td style="padding: 0.3rem 0.5rem;">IP</td>' +
+      '<td style="padding: 0.3rem 0.5rem;">CPUs</td><td style="padding: 0.3rem 0.5rem;">GPUs</td></tr>' +
+      aliveNodes.map(n =>
+        '<tr style="border-top: 1px solid var(--border);">' +
+        '<td style="padding: 0.3rem 0.5rem; color: var(--text);">' + (n.hostname || '-') + '</td>' +
+        '<td style="padding: 0.3rem 0.5rem; color: var(--dim);">' + (n.ip || '-') + '</td>' +
+        '<td style="padding: 0.3rem 0.5rem; color: var(--text);">' + (n.cpus || 0) + '</td>' +
+        '<td style="padding: 0.3rem 0.5rem; color: var(--text);">' + (n.gpus || 0) + '</td></tr>'
+      ).join('') + '</table>';
+  }
+
+  // Render jobs
+  if (!jobs || jobs.length === 0) {
+    jobsEl.innerHTML = '<span style="color: var(--dim);">No jobs submitted yet</span>';
+  } else {
+    const statusColor = s => {
+      if (s === 'SUCCEEDED') return 'var(--accent)';
+      if (s === 'RUNNING') return '#f0c040';
+      if (s === 'FAILED') return '#e06060';
+      if (s === 'PENDING') return 'var(--dim)';
+      return 'var(--dim)';
+    };
+    jobsEl.innerHTML = '<table style="width: 100%; border-collapse: collapse;">' +
+      '<tr style="color: var(--dim); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em;">' +
+      '<td style="padding: 0.3rem 0.5rem;">Job ID</td><td style="padding: 0.3rem 0.5rem;">Status</td>' +
+      '<td style="padding: 0.3rem 0.5rem;">Submitted</td></tr>' +
+      jobs.map(j => {
+        const status = j.status || 'UNKNOWN';
+        const jobId = j.submission_id || j.job_id || '-';
+        const shortId = jobId.length > 20 ? jobId.slice(0, 20) + '...' : jobId;
+        let timeStr = '-';
+        if (j.start_time) {
+          const d = new Date(j.start_time / 1000);  // Ray uses ms timestamp
+          if (!isNaN(d.getTime())) timeStr = d.toLocaleTimeString();
+        }
+        return '<tr style="border-top: 1px solid var(--border);">' +
+          '<td style="padding: 0.3rem 0.5rem; color: var(--text); font-family: monospace; font-size: 0.78rem;" title="' + jobId + '">' + shortId + '</td>' +
+          '<td style="padding: 0.3rem 0.5rem; color: ' + statusColor(status) + '; font-weight: 500;">' + status + '</td>' +
+          '<td style="padding: 0.3rem 0.5rem; color: var(--dim);">' + timeStr + '</td></tr>';
+      }).join('') + '</table>';
   }
 }
 
@@ -1443,6 +1520,10 @@ function connect() {
         }
       }
 
+      if (msg.ray_cluster_nodes || msg.ray_jobs) {
+        renderRayClusterActivity(msg.ray_cluster_nodes || [], msg.ray_jobs || []);
+      }
+
       if (totalCompleted > 0) {
         fetch(basePath + '/api/state').then(r => r.json()).then(data => {
           totalCompleted = data.total_completed;
@@ -1575,6 +1656,8 @@ function connect() {
       else if (msg.result_type === 'compute') computeResults.push(msg.data);
       else if (msg.result_type === 'scaling') scalingResults = msg.data;
       updateStats();
+    } else if (msg.type === 'ray_cluster') {
+      renderRayClusterActivity(msg.ray_cluster_nodes || [], msg.ray_jobs || []);
     }
   };
 
