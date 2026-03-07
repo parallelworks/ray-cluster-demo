@@ -1645,33 +1645,48 @@ echo "All workers dispatched successfully."
 echo "  Worker sites: ${NUM_WORKERS}"
 echo "=========================================="
 
-# Keep this step alive so cleanup only fires on workflow cancel.
-# Local SLURM: poll squeue for tracked job IDs.
-# Remote/other: workers already ran via SSH; keep alive indefinitely
-# until the workflow is cancelled.
-if [ -f "${JOB_DIR}/slurm_jobids" ]; then
-    echo "Monitoring local SLURM jobs..."
-    while true; do
-        ALL_DONE=true
+# Stay alive while workers are connected to the Ray cluster.
+# Exits if all workers disconnect (walltime expiry, failure, etc.)
+# so cleanup fires and the workflow can end naturally.
+VENV_DIR="$(cat "${JOB_DIR}/RAY_VENV_DIR" 2>/dev/null || echo "")"
+PYTHON_CMD="${VENV_DIR}/bin/python"
+[ ! -x "${PYTHON_CMD}" ] && PYTHON_CMD="python3"
+
+echo "Monitoring cluster — will exit when all workers disconnect..."
+CONSECUTIVE_ZERO=0
+while true; do
+    # Count worker CPUs via Ray API (head has 0 CPUs, workers have > 0)
+    WORKER_CPUS=$(${PYTHON_CMD} -c "
+import ray, sys
+try:
+    ray.init(address='${RAY_HEAD_IP}:6379', ignore_reinit_error=True)
+    cpus = ray.cluster_resources().get('CPU', 0)
+    print(int(cpus))
+except:
+    print(0)
+" 2>/dev/null || echo "0")
+
+    # Also check local SLURM jobs if any
+    LOCAL_SLURM_RUNNING=false
+    if [ -f "${JOB_DIR}/slurm_jobids" ]; then
         while IFS= read -r jid; do
             [ -z "${jid}" ] && continue
             JOB_STATE=$(squeue -j "${jid}" -h -o "%T" 2>/dev/null || echo "")
             if [ -n "${JOB_STATE}" ]; then
-                ALL_DONE=false
+                LOCAL_SLURM_RUNNING=true
                 break
             fi
         done < "${JOB_DIR}/slurm_jobids"
-        if [ "${ALL_DONE}" = "true" ]; then
-            echo "All local SLURM jobs completed."
+    fi
+
+    if [ "${WORKER_CPUS}" = "0" ] && [ "${LOCAL_SLURM_RUNNING}" = "false" ]; then
+        CONSECUTIVE_ZERO=$((CONSECUTIVE_ZERO + 1))
+        if [ ${CONSECUTIVE_ZERO} -ge 4 ]; then
+            echo "No workers connected for 2 minutes. Exiting."
             break
         fi
-        sleep 15
-    done
-fi
-
-# Stay alive until the workflow is cancelled.
-# This prevents cleanup from firing prematurely.
-echo "Dispatch workers standing by (cancel workflow to terminate)..."
-while true; do
+    else
+        CONSECUTIVE_ZERO=0
+    fi
     sleep 30
 done
