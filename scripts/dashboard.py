@@ -50,7 +50,6 @@ connected_ws = []  # list of WebSocket
 
 def _reset_state():
     state["nodes"] = {}
-    state["head_node"] = {}
     state["workload_type"] = "benchmark"  # "benchmark", "fractal", or "cluster_only"
     state["phase"] = "waiting"  # waiting, throughput, compute, scaling, rendering, cluster_ready, complete
     state["tasks"] = []
@@ -64,9 +63,10 @@ def _reset_state():
     state["grid_size"] = 0
     state["image_size"] = 0
     state["fractal_tiles"] = {}
-    # Preserve pending_sites across config resets — they are set by dispatch
-    # before the benchmark script sends /api/config
+    # Preserve pending_sites and head_node across config resets — they are set
+    # by dispatch/start_ray_head before the benchmark or cluster_ready sends /api/config
     # state["pending_sites"] is NOT reset here
+    # state["head_node"] is NOT reset here
 
 
 def _compute_throughput_history():
