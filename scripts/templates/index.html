@@ -364,6 +364,7 @@
 
 <div class="tab-bar">
   <button id="tab-cluster" class="tab-btn active" onclick="switchTab('cluster')">Cluster</button>
+  <button id="tab-cluster-only" class="tab-btn hidden" onclick="switchTab('cluster-only')">Connect</button>
   <button id="tab-fractal" class="tab-btn hidden" onclick="switchTab('fractal')">Fractal</button>
   <button id="tab-ray" class="tab-btn" onclick="switchTab('ray')">Ray Dashboard</button>
 </div>
@@ -404,6 +405,113 @@
   <div id="fractal-view" class="fractal-view view-hidden">
     <canvas id="fractal-canvas"></canvas>
     <div class="zoom-hint">Scroll to zoom &middot; Drag to pan &middot; Double-click to reset</div>
+  </div>
+
+  <!-- Cluster-only instructions view -->
+  <div id="cluster-only-view" class="cluster-view view-hidden" style="padding: 2rem; overflow-y: auto;">
+    <div class="chart-card" style="max-width: 900px; margin: 0 auto;">
+      <div class="card-title" style="font-size: 1.1rem; margin-bottom: 0.5rem;">Ray Cluster Ready</div>
+      <p style="color: var(--dim); margin-bottom: 1.5rem;">
+        The multi-site Ray cluster is running with no demo workload. You can submit custom Ray jobs using the instructions below.
+      </p>
+
+      <div style="margin-bottom: 1.5rem;">
+        <div class="card-title" style="font-size: 0.95rem;">1. Connect via SSH Tunnel</div>
+        <p style="color: var(--dim); font-size: 0.85rem; margin: 0.5rem 0;">
+          From your local machine, open an SSH tunnel to the Ray head node's GCS port (6379):
+        </p>
+        <pre id="ssh-tunnel-cmd" style="background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; font-size: 0.82rem; color: var(--accent); overflow-x: auto; white-space: pre-wrap; word-break: break-all; margin: 0.5rem 0;">ssh -L 6379:&lt;RAY_HEAD_IP&gt;:6379 -o ProxyCommand="pw ssh --proxy-command %h" $USER@&lt;head-resource&gt;</pre>
+      </div>
+
+      <div style="margin-bottom: 1.5rem;">
+        <div class="card-title" style="font-size: 0.95rem;">2. Submit a Ray Job (Python)</div>
+        <p style="color: var(--dim); font-size: 0.85rem; margin: 0.5rem 0;">
+          Connect to the cluster and submit tasks from a local Python script:
+        </p>
+        <pre style="background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; font-size: 0.82rem; color: var(--text); overflow-x: auto; white-space: pre-wrap;">import ray
+
+# Connect to the remote cluster via your SSH tunnel
+ray.init(address="ray://127.0.0.1:10001")
+
+# Or connect directly if running on the head node:
+# ray.init(address="&lt;RAY_HEAD_IP&gt;:6379")
+
+@ray.remote
+def my_task(x):
+    import time, socket
+    time.sleep(1)
+    return f"Result {x} from {socket.gethostname()}"
+
+# Submit tasks across the cluster
+futures = [my_task.remote(i) for i in range(10)]
+results = ray.get(futures)
+for r in results:
+    print(r)
+
+ray.shutdown()</pre>
+      </div>
+
+      <div style="margin-bottom: 1.5rem;">
+        <div class="card-title" style="font-size: 0.95rem;">3. Submit via Ray Job Submission API</div>
+        <p style="color: var(--dim); font-size: 0.85rem; margin: 0.5rem 0;">
+          Use the Ray Jobs CLI to submit scripts to the cluster. First tunnel to the Ray dashboard port (8265):
+        </p>
+        <pre style="background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; font-size: 0.82rem; color: var(--text); overflow-x: auto; white-space: pre-wrap;"># Tunnel to the Ray dashboard
+ssh -L 8265:&lt;RAY_HEAD_IP&gt;:8265 -o ProxyCommand="pw ssh --proxy-command %h" $USER@&lt;head-resource&gt;
+
+# Submit a job
+ray job submit --address http://127.0.0.1:8265 -- python my_script.py
+
+# Check status
+ray job list --address http://127.0.0.1:8265</pre>
+      </div>
+
+      <div style="margin-bottom: 1.5rem;">
+        <div class="card-title" style="font-size: 0.95rem;">4. Run Directly on the Head Node</div>
+        <p style="color: var(--dim); font-size: 0.85rem; margin: 0.5rem 0;">
+          SSH to the head node and run scripts directly:
+        </p>
+        <pre id="direct-cmd" style="background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; font-size: 0.82rem; color: var(--text); overflow-x: auto; white-space: pre-wrap;"># SSH to head node
+pw ssh &lt;head-resource&gt;
+
+# Activate the Ray environment
+source &lt;job_dir&gt;/.venv/bin/activate
+
+# Set the Ray address
+export RAY_ADDRESS="&lt;RAY_HEAD_IP&gt;:6379"
+
+# Run your script
+python my_script.py</pre>
+      </div>
+
+      <div>
+        <div class="card-title" style="font-size: 0.95rem;">Cluster Info</div>
+        <div id="cluster-info-table" style="margin-top: 0.5rem; font-size: 0.85rem;">
+          <table style="width: 100%; border-collapse: collapse;">
+            <tr style="border-bottom: 1px solid var(--border);">
+              <td style="padding: 0.4rem 0; color: var(--dim);">Ray Head IP</td>
+              <td id="info-ray-head-ip" style="padding: 0.4rem 0; color: var(--accent); font-family: monospace;">-</td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--border);">
+              <td style="padding: 0.4rem 0; color: var(--dim);">GCS Port</td>
+              <td style="padding: 0.4rem 0; font-family: monospace;">6379</td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--border);">
+              <td style="padding: 0.4rem 0; color: var(--dim);">Ray Client Port</td>
+              <td style="padding: 0.4rem 0; font-family: monospace;">10001</td>
+            </tr>
+            <tr style="border-bottom: 1px solid var(--border);">
+              <td style="padding: 0.4rem 0; color: var(--dim);">Ray Dashboard</td>
+              <td style="padding: 0.4rem 0; font-family: monospace;">8265</td>
+            </tr>
+            <tr>
+              <td style="padding: 0.4rem 0; color: var(--dim);">Connected Workers</td>
+              <td id="info-worker-count" style="padding: 0.4rem 0; font-family: monospace;">0</td>
+            </tr>
+          </table>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Sidebar -->
@@ -513,6 +621,7 @@ const siteStats = {};
 const pendingSites = {}; // site_id -> {cluster_name, scheduler_type}
 const rayNodes = {};  // node_ip -> {site_id, num_cpus, ...}
 let headNode = {};    // {ip, cluster_name, scheduler_type} — coordinator hub
+let rayHeadIp = '';   // Ray head IP address
 const throughputHistory = [];
 let lastThroughputCheck = null;
 let lastTaskCounts = {};
@@ -554,6 +663,7 @@ function switchTab(tab) {
   activeTab = tab;
   const clusterView = document.getElementById('cluster-view');
   const fractalView = document.getElementById('fractal-view');
+  const clusterOnlyView = document.getElementById('cluster-only-view');
   const sidebar = document.getElementById('sidebar');
   const mainContainer = document.getElementById('main-container');
   const throughputMini = document.getElementById('throughput-mini-card');
@@ -568,6 +678,7 @@ function switchTab(tab) {
   // Hide all views
   clusterView.classList.add('view-hidden');
   fractalView.classList.add('view-hidden');
+  clusterOnlyView.classList.add('view-hidden');
   rayWrap.classList.add('view-hidden');
   sidebar.classList.remove('view-hidden');
   mainContainer.classList.remove('no-sidebar');
@@ -579,6 +690,12 @@ function switchTab(tab) {
     else resultsCard.style.display = 'none';
     rayIframe.src = 'about:blank';
     drawAll();
+  } else if (tab === 'cluster-only') {
+    clusterOnlyView.classList.remove('view-hidden');
+    throughputMini.style.display = 'none';
+    resultsCard.style.display = 'none';
+    rayIframe.src = 'about:blank';
+    updateClusterOnlyInfo();
   } else if (tab === 'fractal') {
     fractalView.classList.remove('view-hidden');
     throughputMini.style.display = 'none';
@@ -593,6 +710,13 @@ function switchTab(tab) {
     const basePath = location.pathname.replace(/\/$/, '');
     rayIframe.src = basePath + '/ray/#/cluster';
   }
+}
+
+function updateClusterOnlyInfo() {
+  const headIp = headNode.ip || rayHeadIp || '-';
+  document.getElementById('info-ray-head-ip').textContent = headIp;
+  const workerCount = Object.keys(rayNodes).length;
+  document.getElementById('info-worker-count').textContent = workerCount;
 }
 
 // --- Chart label updates ---
@@ -1054,11 +1178,20 @@ function drawAll() {
 }
 
 function updateStats() {
-  const unitLabel = workloadType === 'fractal' ? 'tiles' : 'tasks';
-  const pct = totalPlanned > 0 ? (totalCompleted / totalPlanned * 100) : 0;
-  document.getElementById('progress-bar').style.width = Math.min(pct, 100) + '%';
-  document.getElementById('progress-label').textContent =
-    `${totalCompleted} / ${totalPlanned} ${unitLabel} (${Math.round(pct)}%)`;
+  if (workloadType === 'cluster_only') {
+    const workerCount = Object.keys(rayNodes).length;
+    document.getElementById('progress-bar').style.width = workerCount > 0 ? '100%' : '0%';
+    document.getElementById('progress-label').textContent =
+      workerCount > 0 ? `${workerCount} worker(s) connected` : 'Waiting for workers...';
+    document.getElementById('progress-title').textContent = 'Cluster Status';
+  } else {
+    const unitLabel = workloadType === 'fractal' ? 'tiles' : 'tasks';
+    const pct = totalPlanned > 0 ? (totalCompleted / totalPlanned * 100) : 0;
+    document.getElementById('progress-bar').style.width = Math.min(pct, 100) + '%';
+    document.getElementById('progress-label').textContent =
+      `${totalCompleted} / ${totalPlanned} ${unitLabel} (${Math.round(pct)}%)`;
+    document.getElementById('progress-title').textContent = 'Progress';
+  }
 
   const el = startTime ? (Date.now() / 1000 - startTime) : 0;
   document.getElementById('stat-elapsed').textContent =
@@ -1084,6 +1217,7 @@ function updateStats() {
     compute: 'CPU Compute',
     scaling: 'Scaling Test',
     rendering: 'Rendering',
+    cluster_ready: 'Cluster Ready',
     complete: 'Complete',
   };
   if (phase === 'waiting' && Object.keys(pendingSites).length > 0 && Object.keys(siteStats).length === 0) {
@@ -1095,6 +1229,9 @@ function updateStats() {
   } else if (phase === 'complete') {
     badge.className = 'status-badge complete';
     badge.innerHTML = '<div class="pulse" style="background:currentColor"></div> ' + (phaseLabels[phase] || phase);
+  } else if (phase === 'cluster_ready') {
+    badge.className = 'status-badge running';
+    badge.innerHTML = '<div class="pulse" style="background:var(--green)"></div> ' + (phaseLabels[phase] || phase);
   } else {
     badge.className = 'status-badge running';
     badge.innerHTML = '<div class="pulse" style="background:currentColor"></div> ' + (phaseLabels[phase] || phase);
@@ -1226,7 +1363,8 @@ function connect() {
       phase = msg.phase || 'waiting';
       mergeSiteStats(msg.site_stats);
       Object.assign(rayNodes, msg.nodes || {});
-      if (msg.head_node) headNode = msg.head_node;
+      if (msg.head_node) { headNode = msg.head_node; if (headNode.ip) rayHeadIp = headNode.ip; }
+      if (msg.ray_head_ip) rayHeadIp = msg.ray_head_ip;
       // Load pending sites
       if (msg.pending_sites) {
         Object.keys(msg.pending_sites).forEach(sid => {
@@ -1241,10 +1379,14 @@ function connect() {
         workloadType = msg.workload_type;
         gridSize = msg.grid_size || 0;
         imageSize = msg.image_size || 0;
+        if (msg.ray_head_ip) rayHeadIp = msg.ray_head_ip;
         updateChartLabels();
         if (workloadType === 'fractal') {
           document.getElementById('tab-fractal').classList.remove('hidden');
           initOffscreen();
+        }
+        if (workloadType === 'cluster_only') {
+          document.getElementById('tab-cluster-only').classList.remove('hidden');
         }
       }
 
@@ -1266,7 +1408,13 @@ function connect() {
             });
           }
 
-          if (data.workload_type === 'fractal') {
+          if (data.ray_head_ip) rayHeadIp = data.ray_head_ip;
+          if (data.workload_type === 'cluster_only') {
+            workloadType = 'cluster_only';
+            updateChartLabels();
+            document.getElementById('tab-cluster-only').classList.remove('hidden');
+            switchTab('cluster-only');
+          } else if (data.workload_type === 'fractal') {
             workloadType = 'fractal';
             gridSize = data.grid_size || gridSize;
             imageSize = data.image_size || imageSize;
@@ -1310,7 +1458,9 @@ function connect() {
       }
     } else if (msg.type === 'head') {
       headNode = msg.head_node || {};
+      if (headNode.ip) rayHeadIp = headNode.ip;
       if (activeTab === 'cluster') drawTopology();
+      if (activeTab === 'cluster-only') updateClusterOnlyInfo();
     } else if (msg.type === 'worker') {
       Object.assign(rayNodes, msg.nodes || {});
       mergeSiteStats(msg.site_stats);
@@ -1322,20 +1472,30 @@ function connect() {
         });
       }
       if (activeTab === 'cluster') drawTopology();
+      if (activeTab === 'cluster-only') updateClusterOnlyInfo();
       updateStats();
     } else if (msg.type === 'phase') {
       phase = msg.phase;
+      if (phase === 'cluster_ready' && workloadType === 'cluster_only') {
+        document.getElementById('tab-cluster-only').classList.remove('hidden');
+        if (activeTab === 'cluster') switchTab('cluster-only');
+      }
       updateStats();
     } else if (msg.type === 'config') {
       if (msg.workload_type) {
         workloadType = msg.workload_type;
         gridSize = msg.grid_size || gridSize;
         imageSize = msg.image_size || imageSize;
+        if (msg.ray_head_ip) rayHeadIp = msg.ray_head_ip;
         totalPlanned = msg.total_tasks || msg.total_tiles || totalPlanned;
         updateChartLabels();
         if (workloadType === 'fractal') {
           document.getElementById('tab-fractal').classList.remove('hidden');
           initOffscreen();
+        }
+        if (workloadType === 'cluster_only') {
+          document.getElementById('tab-cluster-only').classList.remove('hidden');
+          switchTab('cluster-only');
         }
       } else {
         totalPlanned = msg.total_tasks || 0;
