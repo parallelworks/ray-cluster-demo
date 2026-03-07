@@ -193,6 +193,13 @@ jobs:
           DASHBOARD_URL="http://localhost:$(cat ${PW_PARENT_JOB_DIR}/SESSION_PORT)"
           RAY_HEAD_IP=$(cat "${PW_PARENT_JOB_DIR}/RAY_HEAD_IP")
 
+          # Tell the dashboard we're in cluster_only mode BEFORE waiting for workers.
+          # This must happen first because /api/config triggers _reset_state() which
+          # clears nodes — if we wait for workers first, their registrations get wiped.
+          curl -s -X POST "${DASHBOARD_URL}/api/config" \
+            -H "Content-Type: application/json" \
+            -d "{\"workload_type\": \"cluster_only\", \"ray_head_ip\": \"${RAY_HEAD_IP}\"}"
+
           # Wait for at least 1 worker to connect before announcing ready
           echo "Waiting for at least 1 worker CPU..."
           VENV_DIR="${PW_PARENT_JOB_DIR%/}/.venv"
@@ -214,11 +221,7 @@ jobs:
             [ $((WAITED % 30)) -eq 0 ] && echo "  Still waiting for workers... (${WAITED}s elapsed)"
           done
 
-          # Tell the dashboard we're in cluster_only mode
-          curl -s -X POST "${DASHBOARD_URL}/api/config" \
-            -H "Content-Type: application/json" \
-            -d "{\"workload_type\": \"cluster_only\", \"ray_head_ip\": \"${RAY_HEAD_IP}\"}"
-
+          # Signal that the cluster is ready (workers connected)
           curl -s -X POST "${DASHBOARD_URL}/api/phase" \
             -H "Content-Type: application/json" \
             -d '{"phase": "cluster_ready"}'
