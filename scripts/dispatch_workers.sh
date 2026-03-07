@@ -497,7 +497,8 @@ dispatch_worker() {
         -o StrictHostKeyChecking=no
         -o UserKnownHostsFile=/dev/null
         -o ExitOnForwardFailure=yes
-        -o ServerAliveInterval=0
+        -o ServerAliveInterval=15
+        -o ServerAliveCountMax=120
         -o TCPKeepAlive=yes
         -o "ProxyCommand=${PW_CMD} ssh --proxy-command %h"
     )
