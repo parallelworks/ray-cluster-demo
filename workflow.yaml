@@ -154,10 +154,11 @@ jobs:
           bash scripts/dispatch_workers.sh
 
   # =============================================================================
-  # BENCHMARK — Run distributed benchmark across all sites
+  # BENCHMARK — Run distributed benchmark across all sites (skipped in cluster_only mode)
   # =============================================================================
   run_benchmark:
     needs: [wait_for_ray]
+    if: ${{ inputs.workload_settings.workload_type != 'cluster_only' }}
     ssh:
       remoteHost: ${{ inputs.head.resource.ip }}
     steps:
@@ -178,10 +179,49 @@ jobs:
           bash scripts/run_benchmark.sh
 
   # =============================================================================
+  # CLUSTER READY — Notify dashboard in cluster_only mode
+  # =============================================================================
+  cluster_ready:
+    needs: [wait_for_ray, dispatch_workers]
+    if: ${{ inputs.workload_settings.workload_type == 'cluster_only' }}
+    ssh:
+      remoteHost: ${{ inputs.head.resource.ip }}
+    steps:
+      - name: Set cluster ready
+        run: |
+          set -e
+          DASHBOARD_URL="http://localhost:$(cat ${PW_PARENT_JOB_DIR}/SESSION_PORT)"
+          RAY_HEAD_IP=$(cat "${PW_PARENT_JOB_DIR}/RAY_HEAD_IP")
+
+          # Tell the dashboard we're in cluster_only mode
+          curl -s -X POST "${DASHBOARD_URL}/api/config" \
+            -H "Content-Type: application/json" \
+            -d "{\"workload_type\": \"cluster_only\", \"ray_head_ip\": \"${RAY_HEAD_IP}\"}"
+
+          curl -s -X POST "${DASHBOARD_URL}/api/phase" \
+            -H "Content-Type: application/json" \
+            -d '{"phase": "cluster_ready"}'
+
+          echo "=========================================="
+          echo "Ray Cluster Ready (cluster_only mode)"
+          echo "=========================================="
+          echo "  Ray head: ${RAY_HEAD_IP}:6379"
+          echo "  Dashboard: ${DASHBOARD_URL}"
+          echo ""
+          echo "The cluster will remain active until the workflow is cancelled."
+          echo "See the dashboard for connection instructions."
+          echo "=========================================="
+
+          # Keep alive — cluster_only mode stays running until user cancels
+          while true; do
+            sleep 30
+          done
+
+  # =============================================================================
   # COMPLETE — Print summary
   # =============================================================================
   complete:
-    needs: [run_benchmark, update_session]
+    needs: [run_benchmark, cluster_ready, update_session]
     steps:
       - name: Workflow complete
         run: |
@@ -372,13 +412,15 @@ jobs:
           workload_type:
             type: dropdown
             label: Workload Type
-            tooltip: Choose between mathematical benchmark (charts) or fractal rendering (visual canvas)
+            tooltip: Choose between mathematical benchmark (charts), fractal rendering (visual canvas), or cluster-only mode (no workload — just deploy the Ray cluster for custom jobs)
             default: fractal
             options:
               - value: fractal
                 label: "Fractal Rendering"
               - value: benchmark
                 label: "Mathematical Benchmark"
+              - value: cluster_only
+                label: "Cluster Only (no demo workload)"
 
           grid_size:
             type: dropdown
@@ -386,6 +428,7 @@ jobs:
             tooltip: Number of tiles per side (total tiles = N x N)
             default: "16"
             hidden: ${{ inputs.workload_settings.workload_type != 'fractal' }}
+            ignore: ${{ inputs.workload_settings.workload_type != 'fractal' }}
             options:
               - value: "8"
                 label: "8x8 (64 tiles)"

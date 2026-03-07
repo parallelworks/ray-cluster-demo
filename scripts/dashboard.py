@@ -51,8 +51,8 @@ connected_ws = []  # list of WebSocket
 def _reset_state():
     state["nodes"] = {}
     state["head_node"] = {}
-    state["workload_type"] = "benchmark"
-    state["phase"] = "waiting"
+    state["workload_type"] = "benchmark"  # "benchmark", "fractal", or "cluster_only"
+    state["phase"] = "waiting"  # waiting, throughput, compute, scaling, rendering, cluster_ready, complete
     state["tasks"] = []
     state["total_planned"] = 0
     state["total_completed"] = 0
