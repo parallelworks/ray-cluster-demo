@@ -267,8 +267,8 @@ done
 NODE_SCRIPT
         chmod +x "${node_script}"
 
-        # Write PBS job script
-        local script_file="${WORK_DIR}/worker_local_${site_index}.pbs"
+        # Write PBS job script to shared filesystem (JOB_DIR, not WORK_DIR which is /tmp and node-local)
+        local script_file="${JOB_DIR}/worker_local_${site_index}.pbs"
         cat > "${script_file}" <<PBS_SCRIPT
 #!/bin/bash
 #PBS -l select=${num_nodes}:ncpus=1
@@ -313,8 +313,8 @@ PBS_SCRIPT
 
         echo "[${site_name}] ${srun_cmd}"
 
-        # Write worker script to shared filesystem
-        local script_file="${WORK_DIR}/worker_local_${site_index}.sh"
+        # Write worker script to shared filesystem (JOB_DIR, not WORK_DIR which is /tmp and node-local)
+        local script_file="${JOB_DIR}/worker_local_${site_index}.sh"
         cat > "${script_file}" <<WORKER_SCRIPT
 #!/bin/bash
 set -e
