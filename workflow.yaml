@@ -230,13 +230,13 @@ jobs:
           echo "See the dashboard for connection instructions."
           echo "=========================================="
 
-          # Run user script if provided
-          USER_SCRIPT_CONTENT='${{ inputs.workload_settings.user_script }}'
+          # Run user script or keep alive
+          RUN_USER_SCRIPT='${{ inputs.workload_settings.run_user_script }}'
           SCRIPT_TYPE='${{ inputs.workload_settings.script_type }}'
           KEEP_ALIVE='${{ inputs.workload_settings.keep_alive }}'
 
-          if [ -n "${USER_SCRIPT_CONTENT}" ]; then
-            echo "User script provided — preparing to execute..."
+          if [ "${RUN_USER_SCRIPT}" = "true" ]; then
+            echo "User script enabled — preparing to execute..."
 
             curl -s -X POST "${DASHBOARD_URL}/api/phase" \
               -H "Content-Type: application/json" \
@@ -284,16 +284,18 @@ jobs:
                   -d '{"phase": "script_failed"}'
               fi
             fi
-          fi
 
-          # Keep alive or exit
-          if [ "${KEEP_ALIVE}" = "true" ] || [ -z "${USER_SCRIPT_CONTENT}" ]; then
-            echo "The cluster will remain active until the workflow is cancelled."
-            while true; do
-              sleep 30
-            done
+            # After script: keep alive or exit
+            if [ "${KEEP_ALIVE}" = "true" ]; then
+              echo "Keeping cluster alive after script. Cancel the workflow to terminate."
+              while true; do sleep 30; done
+            else
+              echo "Script finished — workflow will terminate."
+            fi
           else
-            echo "keep_alive is false — workflow will terminate."
+            # No script — just keep the cluster alive
+            echo "Cluster is ready. It will remain active until the workflow is cancelled."
+            while true; do sleep 30; done
           fi
 
   # =============================================================================
@@ -523,33 +525,41 @@ jobs:
               - value: cluster_only
                 label: "Cluster Only (no demo workload)"
 
+          run_user_script:
+            type: boolean
+            label: Run User Script
+            default: false
+            tooltip: "Run a custom script on the head node after the cluster is ready. If disabled, the cluster stays alive until you cancel the workflow."
+            hidden: ${{ inputs.workload_settings.workload_type != 'cluster_only' }}
+            ignore: ${{ inputs.workload_settings.workload_type != 'cluster_only' }}
+
           user_script:
             type: editor
             label: User Script
-            tooltip: "Optional script to run after the cluster is ready. Runs on the head node with Ray pre-configured. Leave empty to just deploy the cluster."
+            tooltip: "Script to run on the head node after the cluster is ready. Ray is pre-configured — just import ray and connect."
             optional: true
-            hidden: ${{ inputs.workload_settings.workload_type != 'cluster_only' }}
-            ignore: ${{ inputs.workload_settings.workload_type != 'cluster_only' }}
+            hidden: ${{ inputs.workload_settings.workload_type != 'cluster_only' || inputs.workload_settings.run_user_script == false }}
+            ignore: ${{ inputs.workload_settings.workload_type != 'cluster_only' || inputs.workload_settings.run_user_script == false }}
 
           script_type:
             type: dropdown
             label: Script Type
-            default: bash
-            hidden: ${{ inputs.workload_settings.workload_type != 'cluster_only' }}
-            ignore: ${{ inputs.workload_settings.workload_type != 'cluster_only' }}
+            default: python
+            hidden: ${{ inputs.workload_settings.workload_type != 'cluster_only' || inputs.workload_settings.run_user_script == false }}
+            ignore: ${{ inputs.workload_settings.workload_type != 'cluster_only' || inputs.workload_settings.run_user_script == false }}
             options:
-              - value: bash
-                label: Bash
               - value: python
                 label: Python
+              - value: bash
+                label: Bash
 
           keep_alive:
             type: boolean
             label: Keep Cluster Alive After Script
-            default: true
-            tooltip: "Keep the cluster running after the script completes. Uncheck to terminate the workflow when the script finishes."
-            hidden: ${{ inputs.workload_settings.workload_type != 'cluster_only' }}
-            ignore: ${{ inputs.workload_settings.workload_type != 'cluster_only' }}
+            default: false
+            tooltip: "Keep the cluster running after the script completes. If disabled, the workflow terminates when the script finishes."
+            hidden: ${{ inputs.workload_settings.workload_type != 'cluster_only' || inputs.workload_settings.run_user_script == false }}
+            ignore: ${{ inputs.workload_settings.workload_type != 'cluster_only' || inputs.workload_settings.run_user_script == false }}
 
           grid_size:
             type: dropdown
