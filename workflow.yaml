@@ -515,15 +515,15 @@ jobs:
           workload_type:
             type: dropdown
             label: Workload Type
-            tooltip: Choose between mathematical benchmark (charts), fractal rendering (visual canvas), or cluster-only mode (no workload — just deploy the Ray cluster for custom jobs)
-            default: fractal
+            tooltip: Deploy a Ray cluster, or run a built-in demo workload (fractal rendering or benchmark)
+            default: cluster_only
             options:
+              - value: cluster_only
+                label: "Cluster Only"
               - value: fractal
                 label: "Fractal Rendering"
               - value: benchmark
                 label: "Mathematical Benchmark"
-              - value: cluster_only
-                label: "Cluster Only (no demo workload)"
 
           run_user_script:
             type: boolean
