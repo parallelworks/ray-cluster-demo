@@ -420,7 +420,7 @@
         <p style="color: var(--dim); font-size: 0.85rem; margin: 0.5rem 0;">
           Forward the Ray ports to your local machine using the <code style="color: var(--accent);">pw</code> CLI:
         </p>
-        <pre id="ssh-tunnel-cmd" style="background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; font-size: 0.82rem; color: var(--accent); overflow-x: auto; white-space: pre-wrap; word-break: break-all; margin: 0.5rem 0;">pw ssh -L 6379:localhost:6379 -L 10001:localhost:10001 workspace</pre>
+        <pre id="ssh-tunnel-cmd" style="background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; font-size: 0.82rem; color: var(--accent); overflow-x: auto; white-space: pre-wrap; word-break: break-all; margin: 0.5rem 0;">pw ssh -L 6379:localhost:6379 workspace</pre>
       </div>
 
       <div style="margin-bottom: 1.5rem;">
@@ -431,10 +431,7 @@
         <pre style="background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; font-size: 0.82rem; color: var(--text); overflow-x: auto; white-space: pre-wrap;">import ray
 
 # Connect via your SSH tunnel
-ray.init(address="ray://127.0.0.1:10001")
-
-# Or connect directly on the head node:
-# ray.init(address="<span id="python-head-ip">&lt;RAY_HEAD_IP&gt;</span>:6379")
+ray.init(address="ray://127.0.0.1:6379")
 
 @ray.remote
 def my_task(x):
@@ -494,10 +491,6 @@ python my_script.py</pre>
             <tr style="border-bottom: 1px solid var(--border);">
               <td style="padding: 0.4rem 0; color: var(--dim);">GCS Port</td>
               <td style="padding: 0.4rem 0; font-family: monospace;">6379</td>
-            </tr>
-            <tr style="border-bottom: 1px solid var(--border);">
-              <td style="padding: 0.4rem 0; color: var(--dim);">Ray Client Port</td>
-              <td style="padding: 0.4rem 0; font-family: monospace;">10001</td>
             </tr>
             <tr style="border-bottom: 1px solid var(--border);">
               <td style="padding: 0.4rem 0; color: var(--dim);">Ray Dashboard</td>
@@ -728,11 +721,7 @@ function updateClusterOnlyInfo() {
   // Substitute real values into code blocks
   const sshCmd = document.getElementById('ssh-tunnel-cmd');
   if (sshCmd && headIp !== '-') {
-    sshCmd.textContent = `pw ssh -L 6379:localhost:6379 -L 10001:localhost:10001 workspace`;
-  }
-  const pythonIp = document.getElementById('python-head-ip');
-  if (pythonIp && headIp !== '-') {
-    pythonIp.textContent = headIp;
+    sshCmd.textContent = `pw ssh -L 6379:localhost:6379 workspace`;
   }
   const rayJobsCmd = document.getElementById('ray-jobs-cmd');
   if (rayJobsCmd && headIp !== '-') {
