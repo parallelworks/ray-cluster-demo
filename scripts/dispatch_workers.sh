@@ -493,7 +493,6 @@ dispatch_worker() {
 
     # Build SSH args with bidirectional tunnels
     local SSH_ARGS=(
-        -v
         -i ~/.ssh/pwcli
         -o StrictHostKeyChecking=no
         -o UserKnownHostsFile=/dev/null
@@ -775,8 +774,8 @@ while true; do
     fi
     sleep 2
     attempt=\$((attempt + 1))
-    if [ \${attempt} -gt 120 ]; then
-        echo "[ERROR] Timeout waiting for compute nodes (got \${count}/\${NUM_NODES})"
+    if [ \${attempt} -gt 300 ]; then
+        echo "[ERROR] Timeout waiting for compute nodes after 10min (got \${count}/\${NUM_NODES})"
         kill \${SRUN_PID} 2>/dev/null || true
         exit 1
     fi
@@ -1198,8 +1197,8 @@ while true; do
     fi
     sleep 2
     attempt=\$((attempt + 1))
-    if [ \${attempt} -gt 120 ]; then
-        echo "[ERROR] Timeout waiting for compute nodes (got \${count}/\${NUM_NODES})"
+    if [ \${attempt} -gt 300 ]; then
+        echo "[ERROR] Timeout waiting for compute nodes after 10min (got \${count}/\${NUM_NODES})"
         qdel \${PBS_JOBID} 2>/dev/null || true
         exit 1
     fi
