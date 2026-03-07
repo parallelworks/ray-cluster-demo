@@ -828,7 +828,9 @@ function renderRayClusterActivity(nodes, jobs) {
         const shortId = jobId.length > 20 ? jobId.slice(0, 20) + '...' : jobId;
         let timeStr = '-';
         if (j.start_time) {
-          const d = new Date(j.start_time / 1000);  // Ray uses ms timestamp
+          // Ray start_time could be seconds or milliseconds — normalize
+          const ts = j.start_time > 1e12 ? j.start_time : j.start_time * 1000;
+          const d = new Date(ts);
           if (!isNaN(d.getTime())) timeStr = d.toLocaleTimeString();
         }
         return '<tr style="border-top: 1px solid var(--border);">' +
