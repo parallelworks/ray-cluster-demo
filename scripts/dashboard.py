@@ -472,6 +472,22 @@ def _safe_site_stats():
     return {k: {kk: vv for kk, vv in v.items()} for k, v in state["site_stats"].items()}
 
 
+@app.get("/api/debug/ray")
+async def debug_ray():
+    """Debug endpoint — shows raw Ray API poll results."""
+    debug = {"ray_cluster_nodes": state.get("ray_cluster_nodes", []), "ray_jobs": state.get("ray_jobs", [])}
+    # Also try fetching live to show raw responses
+    raw = {}
+    for path in ["/nodes?view=summary", "/api/v0/jobs", "/api/jobs/"]:
+        try:
+            resp = await _ray_client.get(path)
+            raw[path] = {"status": resp.status_code, "body": resp.json() if resp.status_code == 200 else resp.text[:500]}
+        except Exception as e:
+            raw[path] = {"error": str(e)}
+    debug["raw_api_responses"] = raw
+    return debug
+
+
 @app.get("/api/state")
 async def get_state():
     """Return full state for late-joining browsers."""
