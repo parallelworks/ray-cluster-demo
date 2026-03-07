@@ -64,6 +64,8 @@ def _reset_state():
     state["image_size"] = 0
     state["fractal_tiles"] = {}
     state["_seen_jobs"] = {}
+    global _dashboard_start_time
+    _dashboard_start_time = time.time()
     # Preserve pending_sites and head_node across config resets — they are set
     # by dispatch/start_ray_head before the benchmark or cluster_ready sends /api/config
     # state["pending_sites"] is NOT reset here
@@ -123,6 +125,7 @@ state["ray_jobs"] = []
 state["ray_cluster_nodes"] = []
 # Track which jobs we've already counted so we don't double-count
 state["_seen_jobs"] = {}  # job_id -> last known status
+_dashboard_start_time = time.time()  # ignore jobs that finished before dashboard started
 
 
 _ray_connect_failures = 0
@@ -257,17 +260,33 @@ async def _poll_ray_api():
                 if not logged_first:
                     _poll_log.info(f"Ray poll: {len(jobs_list)} jobs, sample keys: {list(jobs_list[0].keys()) if jobs_list else []}")
 
-                # Sync jobs into task/progress system
+                # Sync jobs into task/progress system.
+                # Only track jobs that started AFTER the dashboard launched
+                # to avoid counting stale jobs from previous Ray sessions.
                 for job in jobs_list:
                     job_id = job.get("job_id") or job.get("submission_id") or ""
                     if not job_id:
                         continue
+
+                    # Skip jobs that are already finished and started before this session
                     status = job.get("status", "UNKNOWN")
                     prev_status = state["_seen_jobs"].get(job_id)
+                    if prev_status is None and status in ("SUCCEEDED", "FAILED", "STOPPED"):
+                        # Check if this job ended before the dashboard started
+                        end_ts = job.get("end_time", 0) or 0
+                        if end_ts > 1e12:
+                            end_ts /= 1000  # ms -> s
+                        if end_ts > 0 and end_ts < _dashboard_start_time:
+                            state["_seen_jobs"][job_id] = status  # mark seen, skip
+                            continue
 
                     if prev_status == status:
                         continue  # No change
                     state["_seen_jobs"][job_id] = status
+
+                    # Also skip DRIVER-type jobs (e.g. ray.init() health checks)
+                    if job.get("type") == "DRIVER" and not job.get("submission_id"):
+                        continue
 
                     # Job just started running — count as a planned task
                     if status == "RUNNING" and prev_status is None:
