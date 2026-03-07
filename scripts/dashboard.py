@@ -118,39 +118,70 @@ state["ray_jobs"] = []  # [{job_id, status, ...}]
 
 async def _poll_ray_api():
     """Periodically poll Ray's REST API for cluster nodes and jobs."""
+    import logging
+    log = logging.getLogger("dashboard.poller")
+    logged_first_success = False
     while True:
         try:
-            # Fetch nodes
-            resp = await _ray_client.get("/nodes?view=summary")
-            if resp.status_code == 200:
-                data = resp.json()
-                nodes_summary = data.get("data", {}).get("summary", [])
-                ray_info = []
-                for node in nodes_summary:
-                    ray_info.append({
-                        "node_id": node.get("nodeId", ""),
-                        "ip": node.get("ip", ""),
-                        "hostname": node.get("hostname", ""),
-                        "state": node.get("state", ""),
-                        "cpus": node.get("numCpus", 0) if isinstance(node.get("numCpus"), (int, float)) else 0,
-                        "gpus": node.get("numGpus", 0) if isinstance(node.get("numGpus"), (int, float)) else 0,
-                        "alive": node.get("state", "") == "ALIVE",
-                    })
-                state["ray_cluster_nodes"] = ray_info
+            # Fetch nodes — try the /nodes?view=summary endpoint
+            try:
+                resp = await _ray_client.get("/nodes?view=summary")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    nodes_summary = data.get("data", {}).get("summary", [])
+                    ray_info = []
+                    for node in nodes_summary:
+                        ray_info.append({
+                            "node_id": node.get("nodeId", node.get("node_id", "")),
+                            "ip": node.get("ip", node.get("nodeManagerAddress", "")),
+                            "hostname": node.get("hostname", ""),
+                            "state": node.get("state", ""),
+                            "cpus": node.get("numCpus", 0) if isinstance(node.get("numCpus"), (int, float)) else 0,
+                            "gpus": node.get("numGpus", 0) if isinstance(node.get("numGpus"), (int, float)) else 0,
+                            "alive": node.get("state", "") == "ALIVE",
+                        })
+                    state["ray_cluster_nodes"] = ray_info
+                    if not logged_first_success:
+                        log.info(f"Ray nodes poll OK: {len(ray_info)} nodes, sample keys: {list(nodes_summary[0].keys()) if nodes_summary else '(empty)'}")
+                else:
+                    log.warning(f"Ray nodes poll: status {resp.status_code}, body: {resp.text[:200]}")
+            except httpx.ConnectError:
+                pass  # Ray dashboard not up yet
 
-            # Fetch jobs
-            resp = await _ray_client.get("/api/jobs/")
-            if resp.status_code == 200:
-                jobs = resp.json()
-                # Keep recent jobs (last 20)
-                if isinstance(jobs, list):
+            # Fetch jobs — try /api/v0/jobs first, fall back to /api/jobs/
+            try:
+                jobs_list = []
+                resp = await _ray_client.get("/api/v0/jobs")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    # Could be {"jobs": [...]} or bare list
+                    if isinstance(data, dict):
+                        jobs_list = data.get("jobs", [])
+                    elif isinstance(data, list):
+                        jobs_list = data
+                elif resp.status_code == 404:
+                    # Fall back to older API path
+                    resp = await _ray_client.get("/api/jobs/")
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if isinstance(data, dict):
+                            jobs_list = data.get("jobs", [])
+                        elif isinstance(data, list):
+                            jobs_list = data
+
+                if jobs_list:
                     state["ray_jobs"] = sorted(
-                        jobs, key=lambda j: j.get("start_time", 0) or 0, reverse=True
+                        jobs_list, key=lambda j: j.get("start_time", 0) or 0, reverse=True
                     )[:20]
+                    if not logged_first_success:
+                        log.info(f"Ray jobs poll OK: {len(jobs_list)} jobs, sample keys: {list(jobs_list[0].keys()) if jobs_list else '(empty)'}")
+            except httpx.ConnectError:
+                pass  # Ray dashboard not up yet
 
-            await _broadcast({"type": "ray_cluster", "ray_cluster_nodes": state.get("ray_cluster_nodes", []), "ray_jobs": state["ray_jobs"]})
-        except Exception:
-            pass  # Ray dashboard may not be up yet
+            logged_first_success = True
+            await _broadcast({"type": "ray_cluster", "ray_cluster_nodes": state.get("ray_cluster_nodes", []), "ray_jobs": state.get("ray_jobs", [])})
+        except Exception as e:
+            log.warning(f"Ray API poll error: {e}")
         await asyncio.sleep(5)
 
 @app.on_event("startup")
