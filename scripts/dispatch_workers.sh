@@ -82,6 +82,7 @@ for i, t in enumerate(workers):
     if use_scheduler and not scheduler_type:
         scheduler_type = 'slurm'
     slurm = t.get('slurm', {}) or {}
+    pbs = t.get('pbs', {}) or {}
     # Detect if worker is on the same resource as head
     is_local = (res.get('name', '') == head_name) if head_name else False
     sites.append({
@@ -97,6 +98,11 @@ for i, t in enumerate(workers):
         'slurm_qos': slurm.get('qos', ''),
         'slurm_time': slurm.get('time', '00:05:00'),
         'slurm_nodes': slurm.get('nodes', '1'),
+        'pbs_queue': pbs.get('queue', ''),
+        'pbs_account': pbs.get('account', ''),
+        'pbs_nodes': pbs.get('nodes', '1'),
+        'pbs_walltime': pbs.get('walltime', '01:00:00'),
+        'pbs_directives': pbs.get('scheduler_directives', ''),
     })
 print(json.dumps(sites))
 ")
@@ -147,7 +153,7 @@ while True:
 '
 
 # =============================================================================
-# Local worker dispatch (same site as head — SLURM, no tunnels needed)
+# Local worker dispatch (same site as head — SLURM/PBS, no tunnels needed)
 # =============================================================================
 dispatch_local_workers() {
     local site_index=$1
@@ -158,23 +164,149 @@ dispatch_local_workers() {
     local slurm_qos=$6
     local slurm_time=$7
     local slurm_nodes=$8
+    local pbs_queue=$9
+    local pbs_account=${10}
+    local pbs_nodes=${11}
+    local pbs_walltime=${12}
+    local pbs_directives=${13}
 
     local site_id="site-1"  # Local workers are part of the head's site
 
-    echo "[${site_name}] Dispatching ${slurm_nodes} local SLURM worker(s) on ${site_name}"
+    if [ "${scheduler_type}" = "pbs" ]; then
+        local num_nodes="${pbs_nodes:-1}"
+        echo "[${site_name}] Dispatching ${num_nodes} local PBS worker(s) on ${site_name}"
 
-    # Build srun command
-    local srun_cmd="srun --nodes=${slurm_nodes} --ntasks=${slurm_nodes}"
-    [ -n "${slurm_partition}" ] && srun_cmd="${srun_cmd} --partition=${slurm_partition}"
-    [ -n "${slurm_account}" ] && srun_cmd="${srun_cmd} --account=${slurm_account}"
-    [ -n "${slurm_qos}" ] && srun_cmd="${srun_cmd} --qos=${slurm_qos}"
-    [ -n "${slurm_time}" ] && srun_cmd="${srun_cmd} --time=${slurm_time}"
+        # Write the inner worker script that each node will run
+        local node_script="${WORK_DIR}/worker_local_${site_index}_node.sh"
+        cat > "${node_script}" <<'NODE_SCRIPT'
+#!/bin/bash
+set -e
 
-    echo "[${site_name}] ${srun_cmd}"
+# Pin BLAS threading
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
 
-    # Write worker script to shared filesystem
-    local script_file="${WORK_DIR}/worker_local_${site_index}.sh"
-    cat > "${script_file}" <<WORKER_SCRIPT
+# Activate venv from shared filesystem
+if [ -f "${WORKER_JOB_DIR}/.venv/bin/activate" ]; then
+    source "${WORKER_JOB_DIR}/.venv/bin/activate"
+fi
+
+ray stop --force 2>/dev/null || true
+rm -rf /tmp/ray/session_* 2>/dev/null || true
+sleep 1
+
+WORKER_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+
+# Detect GPUs
+NUM_GPUS=0
+if command -v nvidia-smi &>/dev/null; then
+    NUM_GPUS=$(nvidia-smi -L 2>/dev/null | wc -l)
+    echo "Detected ${NUM_GPUS} GPU(s)"
+fi
+
+echo "Starting Ray worker on $(hostname) (${WORKER_IP}), connecting to ${WORKER_HEAD_IP}:6379..."
+RAY_GPU_ARGS=""
+if [ "${NUM_GPUS}" -gt 0 ]; then
+    RAY_GPU_ARGS="--num-gpus=${NUM_GPUS}"
+fi
+ray start --address="${WORKER_HEAD_IP}:6379" --num-cpus=1 ${RAY_GPU_ARGS}
+
+# Auto-detect cluster name
+CLUSTER_NAME=""
+PW_CMD_LOCAL=""
+for try_cmd in pw ~/pw/pw; do
+    command -v ${try_cmd} &>/dev/null && { PW_CMD_LOCAL=${try_cmd}; break; }
+    [ -x "${try_cmd}" ] && { PW_CMD_LOCAL=${try_cmd}; break; }
+done
+if [ -n "${PW_CMD_LOCAL}" ]; then
+    MY_HOST=$(hostname -s)
+    while IFS= read -r line; do
+        uri=$(echo "${line}" | awk '{print $1}')
+        cname="${uri##*/}"
+        if echo "${MY_HOST}" | grep -qi "${cname}"; then
+            CLUSTER_NAME="${cname}"
+            break
+        fi
+    done < <(${PW_CMD_LOCAL} cluster list 2>/dev/null | grep "^pw://${PW_USER}/" | grep "active")
+fi
+[ -z "${CLUSTER_NAME}" ] && CLUSTER_NAME="${WORKER_SITE_NAME}"
+
+# Register with dashboard
+curl -s -X POST "http://${WORKER_HEAD_IP}:${WORKER_DASH_PORT}/api/worker" \
+    -H "Content-Type: application/json" \
+    -d "{
+        \"site_id\": \"site-1\",
+        \"worker_ip\": \"${WORKER_IP}\",
+        \"num_cpus\": 1,
+        \"num_gpus\": ${NUM_GPUS},
+        \"cluster_name\": \"${CLUSTER_NAME}\",
+        \"scheduler_type\": \"pbs\"
+    }" 2>/dev/null || echo "Note: Could not notify dashboard"
+
+echo "=========================================="
+echo "Ray Worker RUNNING on $(hostname)"
+echo "  Head: ${WORKER_HEAD_IP}:6379"
+echo "  Worker IP: ${WORKER_IP}"
+echo "=========================================="
+
+# Keep alive
+while true; do
+    ray status 2>/dev/null || echo "Worker health: $(date)"
+    sleep 30
+done
+NODE_SCRIPT
+        chmod +x "${node_script}"
+
+        # Write PBS job script
+        local script_file="${WORK_DIR}/worker_local_${site_index}.pbs"
+        cat > "${script_file}" <<PBS_SCRIPT
+#!/bin/bash
+#PBS -l select=${num_nodes}:ncpus=1
+#PBS -l walltime=${pbs_walltime:-01:00:00}
+#PBS -j oe
+$([ -n "${pbs_queue}" ] && echo "#PBS -q ${pbs_queue}")
+$([ -n "${pbs_account}" ] && echo "#PBS -A ${pbs_account}")
+$(echo "${pbs_directives}" | grep -v '^$' || true)
+
+export WORKER_HEAD_IP="${RAY_HEAD_IP}"
+export WORKER_DASH_PORT="${DASHBOARD_PORT}"
+export WORKER_JOB_DIR="${JOB_DIR}"
+export WORKER_SITE_NAME="${site_name}"
+
+# Read allocated nodes from PBS_NODEFILE
+NODES=(\$(sort -u "\${PBS_NODEFILE}"))
+NUM_ALLOCATED=\${#NODES[@]}
+echo "PBS allocated \${NUM_ALLOCATED} node(s): \${NODES[*]}"
+
+# Run worker on each allocated node via pbsdsh
+for NODE_INDEX in \$(seq 0 \$((\${NUM_ALLOCATED} - 1))); do
+    pbsdsh -n \${NODE_INDEX} -- bash ${node_script} &
+done
+
+# Wait for all pbsdsh background processes
+wait
+PBS_SCRIPT
+
+        echo "[${site_name}] Submitting PBS job: qsub ${script_file}"
+        qsub "${script_file}" 2>&1 | sed "s/^/[${site_name}] /" &
+
+    else
+        # SLURM dispatch (original behavior)
+        echo "[${site_name}] Dispatching ${slurm_nodes} local SLURM worker(s) on ${site_name}"
+
+        # Build srun command
+        local srun_cmd="srun --nodes=${slurm_nodes} --ntasks=${slurm_nodes}"
+        [ -n "${slurm_partition}" ] && srun_cmd="${srun_cmd} --partition=${slurm_partition}"
+        [ -n "${slurm_account}" ] && srun_cmd="${srun_cmd} --account=${slurm_account}"
+        [ -n "${slurm_qos}" ] && srun_cmd="${srun_cmd} --qos=${slurm_qos}"
+        [ -n "${slurm_time}" ] && srun_cmd="${srun_cmd} --time=${slurm_time}"
+
+        echo "[${site_name}] ${srun_cmd}"
+
+        # Write worker script to shared filesystem
+        local script_file="${WORK_DIR}/worker_local_${site_index}.sh"
+        cat > "${script_file}" <<WORKER_SCRIPT
 #!/bin/bash
 set -e
 
@@ -198,9 +330,20 @@ sleep 1
 
 WORKER_IP=\$(hostname -I 2>/dev/null | awk '{print \$1}')
 
+# Detect GPUs
+NUM_GPUS=0
+if command -v nvidia-smi &>/dev/null; then
+    NUM_GPUS=\$(nvidia-smi -L 2>/dev/null | wc -l)
+    echo "Detected \${NUM_GPUS} GPU(s)"
+fi
+
 echo "Starting Ray worker on \$(hostname) (\${WORKER_IP}), connecting to \${HEAD_IP}:6379..."
 # Register 1 task slot per node. Tasks use internal parallelism (OpenMP, MPI, etc.)
-ray start --address="\${HEAD_IP}:6379" --num-cpus=1
+RAY_GPU_ARGS=""
+if [ "\${NUM_GPUS}" -gt 0 ]; then
+    RAY_GPU_ARGS="--num-gpus=\${NUM_GPUS}"
+fi
+ray start --address="\${HEAD_IP}:6379" --num-cpus=1 \${RAY_GPU_ARGS}
 
 # Auto-detect cluster name
 CLUSTER_NAME=""
@@ -229,6 +372,7 @@ curl -s -X POST "http://\${HEAD_IP}:\${DASH_PORT}/api/worker" \
         \"site_id\": \"site-1\",
         \"worker_ip\": \"\${WORKER_IP}\",
         \"num_cpus\": 1,
+        \"num_gpus\": \${NUM_GPUS},
         \"cluster_name\": \"\${CLUSTER_NAME}\",
         \"scheduler_type\": \"slurm\"
     }" 2>/dev/null || echo "Note: Could not notify dashboard"
@@ -246,7 +390,8 @@ while true; do
 done
 WORKER_SCRIPT
 
-    ${srun_cmd} bash "${script_file}" 2>&1 | sed "s/^/[${site_name}] /" &
+        ${srun_cmd} bash "${script_file}" 2>&1 | sed "s/^/[${site_name}] /" &
+    fi
 }
 
 # =============================================================================
@@ -263,6 +408,11 @@ dispatch_worker() {
     local slurm_qos=$8
     local slurm_time=$9
     local slurm_nodes=${10}
+    local pbs_queue=${11}
+    local pbs_account=${12}
+    local pbs_nodes=${13}
+    local pbs_walltime=${14}
+    local pbs_directives=${15}
 
     local site_id="site-$((site_index + 1))"
     local dispatch_mode="ssh"
@@ -273,6 +423,8 @@ dispatch_worker() {
     local num_nodes=1
     if [ "${dispatch_mode}" = "slurm" ]; then
         num_nodes="${slurm_nodes:-1}"
+    elif [ "${dispatch_mode}" = "pbs" ]; then
+        num_nodes="${pbs_nodes:-1}"
     fi
 
     echo ""
@@ -525,6 +677,13 @@ ray stop --force 2>/dev/null || true
 rm -rf /tmp/ray/session_* 2>/dev/null || true
 sleep 1
 
+# Detect GPUs
+NUM_GPUS=0
+if command -v nvidia-smi &>/dev/null; then
+    NUM_GPUS=\$(nvidia-smi -L 2>/dev/null | wc -l)
+    echo "Detected \${NUM_GPUS} GPU(s)"
+fi
+
 echo "Starting Ray worker: address=\${LOGIN_HOST}:\${PROXY_RAY_PORT} ip=\${MY_TUNNEL_IP}"
 RAY_ARGS="--address=\${LOGIN_HOST}:\${PROXY_RAY_PORT}"
 RAY_ARGS="\${RAY_ARGS} --node-ip-address=\${MY_TUNNEL_IP}"
@@ -533,6 +692,9 @@ RAY_ARGS="\${RAY_ARGS} --object-manager-port=\${MY_OBJ_PORT}"
 RAY_ARGS="\${RAY_ARGS} --min-worker-port=\${MY_MIN_PORT}"
 RAY_ARGS="\${RAY_ARGS} --max-worker-port=\${MY_MAX_PORT}"
 RAY_ARGS="\${RAY_ARGS} --num-cpus=1"
+if [ "\${NUM_GPUS}" -gt 0 ]; then
+    RAY_ARGS="\${RAY_ARGS} --num-gpus=\${NUM_GPUS}"
+fi
 ray start \${RAY_ARGS}
 
 echo "Ray worker started on node \${PROC_ID} (\${NODE_HOST})"
@@ -578,6 +740,7 @@ curl -s -X POST "\${DASHBOARD_URL}/api/worker" \
         \"site_id\": \"\${EXPECTED_SITE_ID:-\${MY_SITE_ID}}\",
         \"worker_ip\": \"\${MY_TUNNEL_IP}\",
         \"num_cpus\": 1,
+        \"num_gpus\": \${NUM_GPUS},
         \"cluster_name\": \"\${CLUSTER_NAME}\",
         \"scheduler_type\": \"\${SCHED_TYPE}\"
     }" 2>/dev/null || echo "Note: Could not notify dashboard"
@@ -644,6 +807,325 @@ touch "\${WORK}/nodeinfo/proxies_ready"
 echo "Forward proxies ready!"
 
 wait \${SRUN_PID}
+WORKER_SCRIPT
+
+    elif [ "${dispatch_mode}" = "pbs" ]; then
+        # Generate per-node config files content
+        local node_configs=""
+        for j in $(seq 0 $((num_nodes - 1))); do
+            node_configs="${node_configs}
+cat > \"\${WORK}/nodeinfo/config_${j}.sh\" <<'NODECONF'
+MY_TUNNEL_IP=${NODE_TUNNEL_IPS[$j]}
+MY_RAYLET_PORT=${NODE_RAYLET_PORTS[$j]}
+MY_OBJ_PORT=${NODE_OBJ_PORTS[$j]}
+MY_MIN_PORT=${NODE_MIN_PORTS[$j]}
+MY_MAX_PORT=${NODE_MAX_PORTS[$j]}
+MY_SITE_ID=${site_id}
+MY_NODE_INDEX=${j}
+NODECONF"
+        done
+
+        # Build PBS directives
+        local pbs_q_directive=""
+        [ -n "${pbs_queue}" ] && pbs_q_directive="#PBS -q ${pbs_queue}"
+        local pbs_a_directive=""
+        [ -n "${pbs_account}" ] && pbs_a_directive="#PBS -A ${pbs_account}"
+        local pbs_extra_directives=""
+        [ -n "${pbs_directives}" ] && pbs_extra_directives="${pbs_directives}"
+
+        cat > "${script_file}" <<WORKER_SCRIPT
+#!/bin/bash
+set -e
+WORK=\${PW_PARENT_JOB_DIR:-\${HOME}/pw/jobs/ray_worker_remote}
+mkdir -p "\${WORK}"
+cd "\${WORK}"
+export PW_PARENT_JOB_DIR="\${WORK}"
+
+# Always fetch latest scripts
+echo 'Checking out scripts...'
+rm -rf _checkout_tmp scripts
+git clone --depth 1 --sparse --filter=blob:none ${REPO_URL} _checkout_tmp 2>/dev/null
+cd _checkout_tmp && git sparse-checkout set scripts 2>/dev/null && cd ..
+cp -r _checkout_tmp/scripts . && rm -rf _checkout_tmp
+
+# Setup Ray
+export RAY_VERSION='${RAY_VERSION}'
+export PYTHON_MICRO_VERSION='${PYTHON_VERSION}'
+bash scripts/setup.sh
+
+# Activate venv
+VENV_DIR="\${WORK}/.venv"
+if [ -f "\${VENV_DIR}/bin/python" ]; then
+    source "\${VENV_DIR}/bin/activate"
+fi
+
+LOGIN_HOST=\$(hostname)
+NUM_NODES=${num_nodes}
+
+# Kill stale proxy processes from prior cancelled runs
+echo 'Cleaning up stale proxies from prior runs...'
+for pf in "\${WORK}"/.proxy_*.pid; do
+    [ -f "\${pf}" ] && kill \$(cat "\${pf}" 2>/dev/null) 2>/dev/null && rm -f "\${pf}" || true
+done
+pkill -f "proxy.*\${WORK}" 2>/dev/null || true
+sleep 1
+
+# Start TCP proxies for reverse tunnels (Ray GCS + dashboard accessible to compute nodes)
+PROXY_RAY_PORT=\$(python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()")
+PROXY_DASH_PORT=\$(python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()")
+
+python3 -c '${PROXY_PY_CODE}' \${PROXY_RAY_PORT} "127.0.0.1:${tunnel_ray_port}" "\${WORK}/.proxy_ray_pid" &
+sleep 0.5
+python3 -c '${PROXY_PY_CODE}' \${PROXY_DASH_PORT} "127.0.0.1:${tunnel_dashboard_port}" "\${WORK}/.proxy_dash_pid" &
+sleep 0.5
+
+echo "Login node proxies:"
+echo "  Ray GCS: \${LOGIN_HOST}:\${PROXY_RAY_PORT} -> 127.0.0.1:${tunnel_ray_port}"
+echo "  Dashboard: \${LOGIN_HOST}:\${PROXY_DASH_PORT} -> 127.0.0.1:${tunnel_dashboard_port}"
+
+# Write per-node configurations
+mkdir -p "\${WORK}/nodeinfo"
+rm -f "\${WORK}/nodeinfo/"*
+${node_configs}
+
+cleanup() {
+    kill \$(cat "\${WORK}/.proxy_ray_pid" 2>/dev/null) 2>/dev/null || true
+    kill \$(cat "\${WORK}/.proxy_dash_pid" 2>/dev/null) 2>/dev/null || true
+    for pf in "\${WORK}/.proxy_fwd_"*.pid; do
+        [ -f "\${pf}" ] && kill \$(cat "\${pf}" 2>/dev/null) 2>/dev/null || true
+    done
+}
+trap cleanup EXIT
+
+# Write PBS task script (runs on each allocated node via pbsdsh)
+cat > "\${WORK}/pbs_task.sh" <<'PBS_TASK_EOF'
+#!/bin/bash
+set -e
+
+# Determine node index from PBS_NODENUM
+if [ -n "\${PBS_NODENUM}" ]; then
+    PROC_ID=\${PBS_NODENUM}
+else
+    PROC_ID=0
+fi
+NODE_HOST=\$(hostname)
+
+# Read my config
+source "\${WORK_DIR}/nodeinfo/config_\${PROC_ID}.sh"
+
+echo "Node \${PROC_ID}: \${NODE_HOST}"
+echo "  Tunnel IP: \${MY_TUNNEL_IP}"
+echo "  Raylet: \${MY_RAYLET_PORT}, Obj: \${MY_OBJ_PORT}"
+echo "  Workers: \${MY_MIN_PORT}-\${MY_MAX_PORT}"
+
+# Write hostname for coordinator
+echo "\${NODE_HOST}" > "\${WORK_DIR}/nodeinfo/host_\${PROC_ID}"
+
+# Wait for forward tunnel proxies
+attempt=0
+while [ ! -f "\${WORK_DIR}/nodeinfo/proxies_ready" ]; do
+    sleep 1
+    attempt=\$((attempt + 1))
+    if [ \${attempt} -gt 180 ]; then
+        echo "[ERROR] Timeout waiting for proxies"
+        exit 1
+    fi
+done
+
+# Activate venv
+if [ -f "\${WORK_DIR}/.venv/bin/activate" ]; then
+    source "\${WORK_DIR}/.venv/bin/activate"
+fi
+
+# Wait for Ray GCS
+echo "Waiting for Ray head at \${LOGIN_HOST}:\${PROXY_RAY_PORT}..."
+attempt=0
+while [ \${attempt} -le 60 ]; do
+    if python3 -c "
+import socket, sys
+s = socket.socket()
+s.settimeout(3)
+try:
+    s.connect(('\${LOGIN_HOST}', \${PROXY_RAY_PORT}))
+    s.close()
+    sys.exit(0)
+except:
+    sys.exit(1)
+" 2>/dev/null; then
+        echo "Ray head reachable!"
+        break
+    fi
+    sleep 2
+    attempt=\$((attempt + 1))
+done
+
+ray stop --force 2>/dev/null || true
+rm -rf /tmp/ray/session_* 2>/dev/null || true
+sleep 1
+
+echo "Starting Ray worker: address=\${LOGIN_HOST}:\${PROXY_RAY_PORT} ip=\${MY_TUNNEL_IP}"
+RAY_ARGS="--address=\${LOGIN_HOST}:\${PROXY_RAY_PORT}"
+RAY_ARGS="\${RAY_ARGS} --node-ip-address=\${MY_TUNNEL_IP}"
+RAY_ARGS="\${RAY_ARGS} --node-manager-port=\${MY_RAYLET_PORT}"
+RAY_ARGS="\${RAY_ARGS} --object-manager-port=\${MY_OBJ_PORT}"
+RAY_ARGS="\${RAY_ARGS} --min-worker-port=\${MY_MIN_PORT}"
+RAY_ARGS="\${RAY_ARGS} --max-worker-port=\${MY_MAX_PORT}"
+RAY_ARGS="\${RAY_ARGS} --num-cpus=1"
+ray start \${RAY_ARGS}
+
+echo "Ray worker started on node \${PROC_ID} (\${NODE_HOST})"
+
+# Auto-detect cluster name
+CLUSTER_NAME=""
+SCHED_TYPE=""
+PW_CMD_LOCAL=""
+for try_cmd in pw ~/pw/pw; do
+    command -v \${try_cmd} &>/dev/null && { PW_CMD_LOCAL=\${try_cmd}; break; }
+    [ -x "\${try_cmd}" ] && { PW_CMD_LOCAL=\${try_cmd}; break; }
+done
+if [ -n "\${PW_CMD_LOCAL}" ]; then
+    MY_HOST=\$(hostname -s)
+    while IFS= read -r line; do
+        uri=\$(echo "\${line}" | awk '{print \$1}')
+        ctype=\$(echo "\${line}" | awk '{print \$3}')
+        cname="\${uri##*/}"
+        if echo "\${MY_HOST}" | grep -qi "\${cname}"; then
+            CLUSTER_NAME="\${cname}"
+            case "\${ctype}" in
+                *slurm*) SCHED_TYPE="slurm" ;;
+                *pbs*)   SCHED_TYPE="pbs" ;;
+                existing) SCHED_TYPE="ssh" ;;
+                *)       SCHED_TYPE="\${ctype}" ;;
+            esac
+            break
+        fi
+    done < <(\${PW_CMD_LOCAL} cluster list 2>/dev/null | grep "^pw://\${PW_USER}/" | grep "active")
+fi
+if [ -z "\${SCHED_TYPE}" ]; then
+    if [ -n "\${PBS_JOBID}" ]; then SCHED_TYPE="pbs"
+    elif [ -n "\${SLURM_JOB_ID}" ]; then SCHED_TYPE="slurm"
+    else SCHED_TYPE="ssh"
+    fi
+fi
+[ -z "\${CLUSTER_NAME}" ] && CLUSTER_NAME="\${EXPECTED_CLUSTER_NAME:-\${MY_SITE_ID}}"
+
+DASHBOARD_URL="http://\${LOGIN_HOST}:\${PROXY_DASH_PORT}"
+curl -s -X POST "\${DASHBOARD_URL}/api/worker" \
+    -H "Content-Type: application/json" \
+    -d "{
+        \"site_id\": \"\${EXPECTED_SITE_ID:-\${MY_SITE_ID}}\",
+        \"worker_ip\": \"\${MY_TUNNEL_IP}\",
+        \"num_cpus\": 1,
+        \"cluster_name\": \"\${CLUSTER_NAME}\",
+        \"scheduler_type\": \"\${SCHED_TYPE}\"
+    }" 2>/dev/null || echo "Note: Could not notify dashboard"
+
+echo "Worker \${PROC_ID} RUNNING (tunnel IP: \${MY_TUNNEL_IP})"
+
+# Keep alive
+while true; do
+    ray status 2>/dev/null || echo "Worker \${PROC_ID} health: \$(date)"
+    sleep 30
+done
+PBS_TASK_EOF
+chmod +x "\${WORK}/pbs_task.sh"
+
+# Write PBS job script
+cat > "\${WORK}/pbs_job.pbs" <<PBS_JOB_EOF
+#!/bin/bash
+#PBS -l select=${num_nodes}:ncpus=1
+#PBS -l walltime=${pbs_walltime:-01:00:00}
+#PBS -j oe
+${pbs_q_directive}
+${pbs_a_directive}
+${pbs_extra_directives}
+
+export WORK_DIR=\${WORK}
+export LOGIN_HOST=\${LOGIN_HOST}
+export PROXY_RAY_PORT=\${PROXY_RAY_PORT}
+export PROXY_DASH_PORT=\${PROXY_DASH_PORT}
+export EXPECTED_CLUSTER_NAME="${site_name}"
+export EXPECTED_SITE_ID="${site_id}"
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+
+# Read allocated nodes
+NODES=(\$(sort -u "\${PBS_NODEFILE}"))
+NUM_ALLOCATED=\${#NODES[@]}
+echo "PBS allocated \${NUM_ALLOCATED} node(s): \${NODES[*]}"
+
+# Write hostnames for coordinator
+for idx in \$(seq 0 \$((\${NUM_ALLOCATED} - 1))); do
+    echo "\${NODES[\${idx}]}" > "\${WORK_DIR}/nodeinfo/host_\${idx}"
+done
+
+# Run worker on each allocated node via pbsdsh
+for NODE_INDEX in \$(seq 0 \$((\${NUM_ALLOCATED} - 1))); do
+    PBS_NODENUM=\${NODE_INDEX} pbsdsh -n \${NODE_INDEX} -- bash "\${WORK_DIR}/pbs_task.sh" &
+done
+
+# Wait for all
+wait
+PBS_JOB_EOF
+
+echo "Submitting to PBS: qsub \${WORK}/pbs_job.pbs"
+
+QSUB_OUTPUT=\$(qsub "\${WORK}/pbs_job.pbs")
+echo "PBS job submitted: \${QSUB_OUTPUT}"
+PBS_JOBID=\$(echo "\${QSUB_OUTPUT}" | grep -oP '^\d+' || echo "\${QSUB_OUTPUT}")
+
+# Wait for all nodes to report hostnames
+echo "Waiting for \${NUM_NODES} compute node(s) to start..."
+attempt=0
+while true; do
+    count=\$(ls -1 "\${WORK}/nodeinfo/host_"* 2>/dev/null | wc -l || echo 0)
+    if [ "\${count}" -ge "\${NUM_NODES}" ]; then
+        break
+    fi
+    sleep 2
+    attempt=\$((attempt + 1))
+    if [ \${attempt} -gt 120 ]; then
+        echo "[ERROR] Timeout waiting for compute nodes (got \${count}/\${NUM_NODES})"
+        qdel \${PBS_JOBID} 2>/dev/null || true
+        exit 1
+    fi
+done
+
+echo "All \${NUM_NODES} node(s) reported. Starting forward tunnel proxies..."
+
+# Kill stale forward proxies from prior runs
+for pf in "\${WORK}"/.proxy_fwd_*.pid; do
+    [ -f "\${pf}" ] && kill \$(cat "\${pf}" 2>/dev/null) 2>/dev/null && rm -f "\${pf}" || true
+done
+sleep 0.5
+
+# Start forward tunnel proxies: login_node:port -> compute_node:port
+for j in \$(seq 0 \$((\${NUM_NODES} - 1))); do
+    NODE_HOST=\$(cat "\${WORK}/nodeinfo/host_\${j}")
+    source "\${WORK}/nodeinfo/config_\${j}.sh"
+    echo "  Node \${j} (\${NODE_HOST}): proxying ports \${MY_MIN_PORT}-\${MY_MAX_PORT}, \${MY_RAYLET_PORT}, \${MY_OBJ_PORT}"
+
+    # Proxy raylet port
+    python3 -c '${PROXY_PY_CODE}' \${MY_RAYLET_PORT} "\${NODE_HOST}:\${MY_RAYLET_PORT}" "\${WORK}/.proxy_fwd_\${j}_raylet.pid" &
+    # Proxy object manager port
+    python3 -c '${PROXY_PY_CODE}' \${MY_OBJ_PORT} "\${NODE_HOST}:\${MY_OBJ_PORT}" "\${WORK}/.proxy_fwd_\${j}_obj.pid" &
+    # Proxy worker ports
+    for port in \$(seq \${MY_MIN_PORT} \${MY_MAX_PORT}); do
+        python3 -c '${PROXY_PY_CODE}' \${port} "\${NODE_HOST}:\${port}" "\${WORK}/.proxy_fwd_\${j}_w\${port}.pid" &
+    done
+done
+sleep 1
+
+# Signal nodes that proxies are ready
+touch "\${WORK}/nodeinfo/proxies_ready"
+echo "Forward proxies ready!"
+
+# Wait for PBS job to finish
+while qstat \${PBS_JOBID} 2>/dev/null | grep -q "\${PBS_JOBID}"; do
+    sleep 10
+done
+echo "PBS job \${PBS_JOBID} completed."
 WORKER_SCRIPT
 
     else
@@ -740,6 +1222,13 @@ echo "  Node IP advertised: ${ip} (via SSH forward tunnel)"
 echo "  Raylet port: ${raylet}"
 echo "  Object manager port: ${obj}"
 echo "  Worker process ports: ${min_port}-${max_port}"
+# Detect GPUs
+NUM_GPUS=0
+if command -v nvidia-smi &>/dev/null; then
+    NUM_GPUS=\$(nvidia-smi -L 2>/dev/null | wc -l)
+    echo "Detected \${NUM_GPUS} GPU(s)"
+fi
+
 RAY_START_ARGS="--address=127.0.0.1:\${PROXY_RAY_PORT}"
 RAY_START_ARGS="\${RAY_START_ARGS} --node-ip-address=${ip}"
 RAY_START_ARGS="\${RAY_START_ARGS} --node-manager-port=${raylet}"
@@ -748,6 +1237,9 @@ RAY_START_ARGS="\${RAY_START_ARGS} --min-worker-port=${min_port}"
 RAY_START_ARGS="\${RAY_START_ARGS} --max-worker-port=${max_port}"
 # Register 1 task slot per node. Tasks use internal parallelism (OpenMP, MPI, etc.)
 RAY_START_ARGS="\${RAY_START_ARGS} --num-cpus=1"
+if [ "\${NUM_GPUS}" -gt 0 ]; then
+    RAY_START_ARGS="\${RAY_START_ARGS} --num-gpus=\${NUM_GPUS}"
+fi
 ray start \${RAY_START_ARGS}
 
 echo "Ray worker started!"
@@ -802,6 +1294,7 @@ curl -s -X POST "\${DASHBOARD_URL}/api/worker" \\
         \"site_id\": \"${site_id}\",
         \"worker_ip\": \"${ip}\",
         \"num_cpus\": 1,
+        \"num_gpus\": \${NUM_GPUS},
         \"cluster_name\": \"\${CLUSTER_NAME}\",
         \"scheduler_type\": \"\${SCHED_TYPE}\"
     }" 2>/dev/null || echo "Note: Could not notify dashboard"
@@ -841,11 +1334,22 @@ for i in $(seq 0 $((NUM_WORKERS - 1))); do
     slurm_qos=$(echo "${SITES_JSON}" | ${PYTHON_CMD} -c "import sys,json;print(json.load(sys.stdin)[${i}].get('slurm_qos',''))")
     slurm_time=$(echo "${SITES_JSON}" | ${PYTHON_CMD} -c "import sys,json;print(json.load(sys.stdin)[${i}].get('slurm_time','00:05:00'))")
     slurm_nodes=$(echo "${SITES_JSON}" | ${PYTHON_CMD} -c "import sys,json;print(json.load(sys.stdin)[${i}].get('slurm_nodes','1'))")
+    pbs_queue=$(echo "${SITES_JSON}" | ${PYTHON_CMD} -c "import sys,json;print(json.load(sys.stdin)[${i}].get('pbs_queue',''))")
+    pbs_account=$(echo "${SITES_JSON}" | ${PYTHON_CMD} -c "import sys,json;print(json.load(sys.stdin)[${i}].get('pbs_account',''))")
+    pbs_nodes=$(echo "${SITES_JSON}" | ${PYTHON_CMD} -c "import sys,json;print(json.load(sys.stdin)[${i}].get('pbs_nodes','1'))")
+    pbs_walltime=$(echo "${SITES_JSON}" | ${PYTHON_CMD} -c "import sys,json;print(json.load(sys.stdin)[${i}].get('pbs_walltime','01:00:00'))")
+    pbs_directives=$(echo "${SITES_JSON}" | ${PYTHON_CMD} -c "import sys,json;print(json.load(sys.stdin)[${i}].get('pbs_directives',''))")
+
+    # Determine node count based on scheduler type
+    local_num_nodes="${slurm_nodes}"
+    if [ "${scheduler_type}" = "pbs" ]; then
+        local_num_nodes="${pbs_nodes}"
+    fi
 
     if [ "${is_local}" = "true" ]; then
-        # Same resource as head — dispatch via local SLURM (no tunnels)
+        # Same resource as head — dispatch via local scheduler (no tunnels)
         echo ""
-        echo "[site-1] Local worker site: ${site_name} (${slurm_nodes} node(s))"
+        echo "[site-1] Local worker site: ${site_name} (${local_num_nodes} node(s))"
         # Notify dashboard this site is pending
         pending_resp=$(curl -s --connect-timeout 3 -X POST "http://localhost:${DASHBOARD_PORT}/api/worker/pending" \
             -H "Content-Type: application/json" \
@@ -854,7 +1358,9 @@ for i in $(seq 0 $((NUM_WORKERS - 1))); do
         echo "[site-1] Pending notification: ${pending_resp}"
         dispatch_local_workers "${i}" "${site_name}" "${scheduler_type}" \
             "${slurm_partition}" "${slurm_account}" "${slurm_qos}" "${slurm_time}" \
-            "${slurm_nodes}"
+            "${slurm_nodes}" \
+            "${pbs_queue}" "${pbs_account}" "${pbs_nodes}" "${pbs_walltime}" \
+            "${pbs_directives}"
         PIDS+=($!)
         SITE_LABELS+=("[site-1] ${site_name}")
     else
@@ -870,7 +1376,9 @@ for i in $(seq 0 $((NUM_WORKERS - 1))); do
         dispatch_worker "$((remote_site_index - 1))" "${site_name}" "${site_ip}" \
             "${use_scheduler}" "${scheduler_type}" \
             "${slurm_partition}" "${slurm_account}" "${slurm_qos}" "${slurm_time}" \
-            "${slurm_nodes}" &
+            "${slurm_nodes}" \
+            "${pbs_queue}" "${pbs_account}" "${pbs_nodes}" "${pbs_walltime}" \
+            "${pbs_directives}" &
         PIDS+=($!)
         SITE_LABELS+=("[site-${remote_site_index}] ${site_name}")
         remote_site_index=$((remote_site_index + 1))
