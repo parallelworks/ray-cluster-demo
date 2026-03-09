@@ -129,7 +129,7 @@ if [ "${NUM_WORKERS}" -eq 0 ]; then
     exit 0
 fi
 
-REPO_URL="https://github.com/parallelworks/ray-cluster-demo.git"
+REPO_URL="https://github.com/parallelworks/ray-cluster.git"
 
 # TCP proxy Python code (reusable)
 PROXY_PY_CODE='

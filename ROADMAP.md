@@ -20,9 +20,9 @@ Prioritized improvements for the multi-site Ray cluster workflow.
 - **Pre-built script templates** — Dropdown of common workloads (PyTorch DDP, Ray Serve, MPI, GPU benchmark) that pre-fill the custom script editor
 - **Data staging guidance** — Document data movement options (cloud buckets, NFS, Ray object store)
 
-## Demo & Polish
+## Polish
 
-- **Fault tolerance demo** — Dashboard button to kill a worker, show Ray redistributing tasks
+- **Fault tolerance visualization** — Dashboard button to kill a worker, show Ray redistributing tasks
 - **Fix scaling benchmark methodology** — Current speedup metric overestimates due to tunnel overhead
 
 ## Strategic
