@@ -408,14 +408,19 @@ async def _poll_ray_api():
                         if node_id:
                             ray_tasks_by_node[node_id] = ray_tasks_by_node.get(node_id, 0) + 1
 
+                # Use high-water marks so counts never decrease as Ray
+                # garbage-collects finished task records from its API.
                 old_counts = state.get("_ray_task_counts", {})
-                if ray_tasks_total > 0 and (
-                    ray_tasks_total != old_counts.get("total", 0) or
-                    ray_tasks_finished != old_counts.get("finished", 0)
+                hwm_total = max(ray_tasks_total, old_counts.get("total", 0))
+                hwm_finished = max(ray_tasks_finished, old_counts.get("finished", 0))
+
+                if hwm_total > 0 and (
+                    hwm_total != old_counts.get("total", 0) or
+                    hwm_finished != old_counts.get("finished", 0)
                 ):
                     state["_ray_task_counts"] = {
-                        "total": ray_tasks_total,
-                        "finished": ray_tasks_finished,
+                        "total": hwm_total,
+                        "finished": hwm_finished,
                         "by_state": ray_tasks_by_state,
                         "by_func": ray_tasks_by_func,
                         "by_node": ray_tasks_by_node,
@@ -423,8 +428,8 @@ async def _poll_ray_api():
                     # Update task placement counts using real Ray task counts
                     # instead of job-level counts
                     if state["phase"] in ("user_script", "complete"):
-                        state["total_planned"] = max(state["total_planned"], ray_tasks_total)
-                        state["total_completed"] = max(state["total_completed"], ray_tasks_finished)
+                        state["total_planned"] = max(state["total_planned"], hwm_total)
+                        state["total_completed"] = max(state["total_completed"], hwm_finished)
                     changed = True
 
             logged_first = True

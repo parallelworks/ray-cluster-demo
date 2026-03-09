@@ -1494,7 +1494,7 @@ function updateStats() {
       siteIds.forEach(s => {
         const current = siteStats[s].task_count || 0;
         const prev = lastTaskCounts[s] || 0;
-        const rate = (current - prev) / dt;
+        const rate = Math.max(0, (current - prev) / dt);
         perSite[s] = rate;
         total += rate;
         lastTaskCounts[s] = current;
@@ -1716,12 +1716,14 @@ function connect() {
         if (tc.total > totalPlanned) totalPlanned = tc.total;
         if (tc.finished > totalCompleted) totalCompleted = tc.finished;
         // Distribute task counts across sites proportionally to worker count
+        // Use high-water mark so counts never decrease (prevents chart resets)
         const siteIds = Object.keys(siteStats);
         if (siteIds.length > 0) {
           const totalWorkers = siteIds.reduce((sum, s) => sum + (siteStats[s].num_workers || 1), 0);
           siteIds.forEach(s => {
             const proportion = (siteStats[s].num_workers || 1) / totalWorkers;
-            siteStats[s].task_count = Math.round(tc.finished * proportion);
+            const newCount = Math.round(tc.finished * proportion);
+            siteStats[s].task_count = Math.max(siteStats[s].task_count || 0, newCount);
           });
         }
         updateStats();
