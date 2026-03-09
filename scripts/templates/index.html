@@ -385,7 +385,7 @@
         </div>
       </div>
       <div class="chart-card">
-        <div class="card-title" id="placement-title">Task Placement by Site</div>
+        <div class="card-title" id="placement-title">Tasks by Site</div>
         <div class="chart-body">
           <canvas id="placement-canvas"></canvas>
         </div>
@@ -884,14 +884,12 @@ function renderRayClusterActivity(nodes, jobs) {
 
 // --- Chart label updates ---
 function updateChartLabels() {
-  const unit = workloadType === 'fractal' ? 'Tile' : 'Task';
-  const units = unit + 's';
-  document.getElementById('placement-title').textContent = unit + ' Placement by Site';
-  document.getElementById('throughput-title').textContent = 'Throughput (' + units.toLowerCase() + '/sec)';
-  document.getElementById('throughput-mini-title').textContent = 'Throughput (' + units.toLowerCase() + '/sec)';
-  document.getElementById('stat-tps-label').textContent = units + '/sec';
-  document.getElementById('stat-avg-label').textContent = 'Avg ms/' + unit.toLowerCase();
-  document.getElementById('stat-total-label').textContent = 'Total ' + units;
+  document.getElementById('placement-title').textContent = 'Tasks by Site';
+  document.getElementById('throughput-title').textContent = 'Throughput (tasks/sec)';
+  document.getElementById('throughput-mini-title').textContent = 'Throughput (tasks/sec)';
+  document.getElementById('stat-tps-label').textContent = 'Tasks/sec';
+  document.getElementById('stat-avg-label').textContent = 'Avg ms/task';
+  document.getElementById('stat-total-label').textContent = 'Total Tasks';
 }
 
 // --- Fractal offscreen ---
@@ -1029,8 +1027,6 @@ function drawTopology() {
     g.fillText('Waiting for Ray nodes to join...', w / 2, h / 2);
     return;
   }
-
-  const unitLabel = workloadType === 'fractal' ? 'tiles' : 'tasks';
 
   // Draw head node hub at center-top
   const cx = w / 2, cy = 44;
@@ -1173,14 +1169,14 @@ function drawTopology() {
         g.font = '9px Inter, system-ui, sans-serif';
         g.textAlign = 'center';
         g.textBaseline = 'middle';
-        g.fillText(nodeIps.length + (nodeIps.length === 1 ? ' node' : ' nodes') + ' \u00b7 ' + (s.task_count || 0) + ' ' + unitLabel, nodeX, nodesY + nodeRadius + 14);
+        g.fillText(nodeIps.length + (nodeIps.length === 1 ? ' node' : ' nodes') + ' \u00b7 ' + (s.task_count || 0) + ' tasks', nodeX, nodesY + nodeRadius + 14);
       } else {
         // No node data yet
         g.fillStyle = '#6b7a90';
         g.font = '9px Inter, system-ui, sans-serif';
         g.textAlign = 'center';
         g.textBaseline = 'middle';
-        g.fillText((s.task_count || 0) + ' ' + unitLabel, nodeX, siteY + 38);
+        g.fillText((s.task_count || 0) + ' tasks', nodeX, siteY + 38);
       }
     }
   });
@@ -1252,11 +1248,10 @@ function drawPlacement() {
   });
 
   // X-axis label
-  const unitLbl = workloadType === 'fractal' ? 'tiles' : 'tasks';
   g.fillStyle = '#6b7a90';
   g.font = '10px Inter, system-ui, sans-serif';
   g.textAlign = 'center';
-  g.fillText(unitLbl + ' completed', w / 2, h - 6);
+  g.fillText('tasks completed', w / 2, h - 6);
 }
 
 // --- Throughput chart (shared renderer for main + mini) ---
@@ -1350,11 +1345,10 @@ function updateStats() {
       workerCount > 0 ? `${workerCount} worker(s) connected` : 'Waiting for workers...';
     document.getElementById('progress-title').textContent = 'Cluster Status';
   } else {
-    const unitLabel = workloadType === 'fractal' ? 'tiles' : 'tasks';
     const pct = totalPlanned > 0 ? (totalCompleted / totalPlanned * 100) : 0;
     document.getElementById('progress-bar').style.width = Math.min(pct, 100) + '%';
     document.getElementById('progress-label').textContent =
-      `${totalCompleted} / ${totalPlanned} ${unitLabel} (${Math.round(pct)}%)`;
+      `${totalCompleted} / ${totalPlanned} tasks (${Math.round(pct)}%)`;
     document.getElementById('progress-title').textContent = 'Progress';
   }
 
@@ -1378,10 +1372,10 @@ function updateStats() {
   const badge = document.getElementById('status-badge');
   const phaseLabels = {
     waiting: 'Waiting',
-    throughput: 'Throughput Test',
-    compute: 'CPU Compute',
-    scaling: 'Scaling Test',
-    rendering: 'Rendering',
+    throughput: 'Running Tasks',
+    compute: 'Running Tasks',
+    scaling: 'Running Tasks',
+    rendering: 'Running Tasks',
     cluster_ready: 'Cluster Ready',
     user_script: 'Running User Script...',
     script_failed: 'Script Failed',
@@ -1713,6 +1707,7 @@ function connect() {
       // Update task counts from Ray Tasks API (individual @ray.remote invocations)
       if (msg.ray_task_counts && msg.ray_task_counts.total > 0) {
         const tc = msg.ray_task_counts;
+        if (tc.finished > 0 && !startTime) startTime = Date.now() / 1000;
         if (tc.total > totalPlanned) totalPlanned = tc.total;
         if (tc.finished > totalCompleted) totalCompleted = tc.finished;
         // Distribute task counts across sites proportionally to worker count
