@@ -101,9 +101,12 @@ for i, t in enumerate(workers):
         'slurm_qos': slurm.get('qos', ''),
         'slurm_time': slurm.get('time', '00:05:00'),
         'slurm_nodes': slurm.get('nodes', '1'),
+        'slurm_gres': slurm.get('gres', ''),
+        'slurm_directives': slurm.get('scheduler_directives', ''),
         'pbs_queue': pbs.get('queue', ''),
         'pbs_account': pbs.get('account', ''),
         'pbs_nodes': pbs.get('nodes', '1'),
+        'pbs_select': pbs.get('select', ''),
         'pbs_walltime': pbs.get('walltime', '01:00:00'),
         'pbs_directives': pbs.get('scheduler_directives', ''),
     })
@@ -173,11 +176,14 @@ dispatch_local_workers() {
     local slurm_qos=$6
     local slurm_time=$7
     local slurm_nodes=$8
-    local pbs_queue=$9
-    local pbs_account=${10}
-    local pbs_nodes=${11}
-    local pbs_walltime=${12}
-    local pbs_directives=${13}
+    local slurm_gres=$9
+    local slurm_directives=${10}
+    local pbs_queue=${11}
+    local pbs_account=${12}
+    local pbs_nodes=${13}
+    local pbs_select=${14}
+    local pbs_walltime=${15}
+    local pbs_directives=${16}
 
     local site_id="site-1"  # Local workers are part of the head's site
 
@@ -275,9 +281,10 @@ NODE_SCRIPT
 
         # Write PBS job script to shared filesystem (JOB_DIR, not WORK_DIR which is /tmp and node-local)
         local script_file="${JOB_DIR}/worker_local_${site_index}.pbs"
+        local pbs_select_str="${pbs_select:-${num_nodes}:ncpus=1}"
         cat > "${script_file}" <<PBS_SCRIPT
 #!/bin/bash
-#PBS -l select=${num_nodes}:ncpus=1
+#PBS -l select=${pbs_select_str}
 #PBS -l walltime=${pbs_walltime:-01:00:00}
 #PBS -j oe
 $([ -n "${pbs_queue}" ] && echo "#PBS -q ${pbs_queue}")
@@ -325,6 +332,8 @@ $([ -n "${slurm_partition}" ] && echo "#SBATCH --partition=${slurm_partition}")
 $([ -n "${slurm_account}" ] && echo "#SBATCH --account=${slurm_account}")
 $([ -n "${slurm_qos}" ] && echo "#SBATCH --qos=${slurm_qos}")
 $([ -n "${slurm_time}" ] && echo "#SBATCH --time=${slurm_time}")
+$([ -n "${slurm_gres}" ] && echo "#SBATCH --gres=${slurm_gres}")
+$(echo "${slurm_directives}" | grep -v '^$' | grep -v '^#*$' || true)
 set -e
 
 HEAD_IP="${RAY_HEAD_IP}"
@@ -451,11 +460,14 @@ dispatch_worker() {
     local slurm_qos=$8
     local slurm_time=$9
     local slurm_nodes=${10}
-    local pbs_queue=${11}
-    local pbs_account=${12}
-    local pbs_nodes=${13}
-    local pbs_walltime=${14}
-    local pbs_directives=${15}
+    local slurm_gres=${11}
+    local slurm_directives=${12}
+    local pbs_queue=${13}
+    local pbs_account=${14}
+    local pbs_nodes=${15}
+    local pbs_select=${16}
+    local pbs_walltime=${17}
+    local pbs_directives=${18}
 
     local site_id="site-$((site_index + 1))"
     local dispatch_mode="ssh"
@@ -572,6 +584,15 @@ dispatch_worker() {
 #SBATCH --qos=${slurm_qos}"
         [ -n "${slurm_time}" ] && sbatch_directives="${sbatch_directives}
 #SBATCH --time=${slurm_time}"
+        [ -n "${slurm_gres}" ] && sbatch_directives="${sbatch_directives}
+#SBATCH --gres=${slurm_gres}"
+        # Append user-provided additional directives
+        if [ -n "${slurm_directives}" ]; then
+            local extra
+            extra=$(echo "${slurm_directives}" | grep -v '^$' | grep -v '^#*$' || true)
+            [ -n "${extra}" ] && sbatch_directives="${sbatch_directives}
+${extra}"
+        fi
 
         # Generate per-node config files content
         local node_configs=""
@@ -1243,7 +1264,7 @@ chmod +x "\${WORK}/pbs_task.sh"
 # Write PBS job script
 cat > "\${WORK}/pbs_job.pbs" <<PBS_JOB_EOF
 #!/bin/bash
-#PBS -l select=${num_nodes}:ncpus=1
+#PBS -l select=${pbs_select:-${num_nodes}:ncpus=1}
 #PBS -l walltime=${pbs_walltime:-01:00:00}
 #PBS -j oe
 ${pbs_q_directive}
@@ -1564,9 +1585,12 @@ for i in $(seq 0 $((NUM_WORKERS - 1))); do
     slurm_qos=$(echo "${SITES_JSON}" | ${PYTHON_CMD} -c "import sys,json;print(json.load(sys.stdin)[${i}].get('slurm_qos',''))")
     slurm_time=$(echo "${SITES_JSON}" | ${PYTHON_CMD} -c "import sys,json;print(json.load(sys.stdin)[${i}].get('slurm_time','00:05:00'))")
     slurm_nodes=$(echo "${SITES_JSON}" | ${PYTHON_CMD} -c "import sys,json;print(json.load(sys.stdin)[${i}].get('slurm_nodes','1'))")
+    slurm_gres=$(echo "${SITES_JSON}" | ${PYTHON_CMD} -c "import sys,json;print(json.load(sys.stdin)[${i}].get('slurm_gres',''))")
+    slurm_directives=$(echo "${SITES_JSON}" | ${PYTHON_CMD} -c "import sys,json;print(json.load(sys.stdin)[${i}].get('slurm_directives',''))")
     pbs_queue=$(echo "${SITES_JSON}" | ${PYTHON_CMD} -c "import sys,json;print(json.load(sys.stdin)[${i}].get('pbs_queue',''))")
     pbs_account=$(echo "${SITES_JSON}" | ${PYTHON_CMD} -c "import sys,json;print(json.load(sys.stdin)[${i}].get('pbs_account',''))")
     pbs_nodes=$(echo "${SITES_JSON}" | ${PYTHON_CMD} -c "import sys,json;print(json.load(sys.stdin)[${i}].get('pbs_nodes','1'))")
+    pbs_select=$(echo "${SITES_JSON}" | ${PYTHON_CMD} -c "import sys,json;print(json.load(sys.stdin)[${i}].get('pbs_select',''))")
     pbs_walltime=$(echo "${SITES_JSON}" | ${PYTHON_CMD} -c "import sys,json;print(json.load(sys.stdin)[${i}].get('pbs_walltime','01:00:00'))")
     pbs_directives=$(echo "${SITES_JSON}" | ${PYTHON_CMD} -c "import sys,json;print(json.load(sys.stdin)[${i}].get('pbs_directives',''))")
 
@@ -1588,8 +1612,8 @@ for i in $(seq 0 $((NUM_WORKERS - 1))); do
         echo "[site-1] Pending notification: ${pending_resp}"
         dispatch_local_workers "${i}" "${site_name}" "${scheduler_type}" \
             "${slurm_partition}" "${slurm_account}" "${slurm_qos}" "${slurm_time}" \
-            "${slurm_nodes}" \
-            "${pbs_queue}" "${pbs_account}" "${pbs_nodes}" "${pbs_walltime}" \
+            "${slurm_nodes}" "${slurm_gres}" "${slurm_directives}" \
+            "${pbs_queue}" "${pbs_account}" "${pbs_nodes}" "${pbs_select}" "${pbs_walltime}" \
             "${pbs_directives}"
         PIDS+=($!)
         SITE_LABELS+=("[site-1] ${site_name}")
@@ -1606,8 +1630,8 @@ for i in $(seq 0 $((NUM_WORKERS - 1))); do
         dispatch_worker "$((remote_site_index - 1))" "${site_name}" "${site_ip}" \
             "${use_scheduler}" "${scheduler_type}" \
             "${slurm_partition}" "${slurm_account}" "${slurm_qos}" "${slurm_time}" \
-            "${slurm_nodes}" \
-            "${pbs_queue}" "${pbs_account}" "${pbs_nodes}" "${pbs_walltime}" \
+            "${slurm_nodes}" "${slurm_gres}" "${slurm_directives}" \
+            "${pbs_queue}" "${pbs_account}" "${pbs_nodes}" "${pbs_select}" "${pbs_walltime}" \
             "${pbs_directives}" &
         PIDS+=($!)
         SITE_LABELS+=("[site-${remote_site_index}] ${site_name}")
