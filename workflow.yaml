@@ -524,6 +524,24 @@ jobs:
                 tooltip: Number of compute nodes to request. Each node runs a Ray worker.
                 ignore: ${{ inputs.workers.[index].resource.schedulerType != 'slurm' || inputs.workers.[index].scheduler == false }}
 
+              gres:
+                label: GPUs (gres)
+                type: dropdown
+                default: ""
+                tooltip: GPU resource specification (--gres). Leave empty for CPU-only workers.
+                options:
+                  - value: ""
+                    label: "None"
+                  - value: "gpu:1"
+                    label: "1 GPU (gpu:1)"
+                  - value: "gpu:2"
+                    label: "2 GPUs (gpu:2)"
+                  - value: "gpu:4"
+                    label: "4 GPUs (gpu:4)"
+                  - value: "gpu:8"
+                    label: "8 GPUs (gpu:8)"
+                ignore: ${{ inputs.workers.[index].resource.schedulerType != 'slurm' || inputs.workers.[index].scheduler == false }}
+
               time:
                 label: Walltime
                 type: string
@@ -535,8 +553,8 @@ jobs:
                 type: editor
                 label: Additional Directives
                 optional: true
-                hidden: true
-                ignore: true
+                tooltip: Additional SLURM directives (include #SBATCH prefix)
+                ignore: ${{ inputs.workers.[index].resource.schedulerType != 'slurm' || inputs.workers.[index].scheduler == false }}
 
           pbs:
             type: group
@@ -574,6 +592,14 @@ jobs:
                 tooltip: Number of compute nodes to request. Each node runs a Ray worker.
                 ignore: ${{ inputs.workers.[index].resource.schedulerType != 'pbs' || inputs.workers.[index].scheduler == false }}
 
+              select:
+                label: Resource Selection
+                type: string
+                optional: true
+                placeholder: "1:ncpus=44:ngpus=4"
+                tooltip: "PBS resource selection string (-l select=). Overrides the Nodes slider when set. Example: 1:ncpus=44:ngpus=4"
+                ignore: ${{ inputs.workers.[index].resource.schedulerType != 'pbs' || inputs.workers.[index].scheduler == false }}
+
               walltime:
                 label: Walltime
                 type: string
@@ -584,7 +610,7 @@ jobs:
               scheduler_directives:
                 label: Additional Directives
                 type: editor
-                tooltip: Additional PBS directives (one per line, e.g. #PBS -l mem=16gb)
+                tooltip: Additional PBS directives (include #PBS prefix)
                 optional: true
                 ignore: ${{ inputs.workers.[index].resource.schedulerType != 'pbs' || inputs.workers.[index].scheduler == false }}
 
