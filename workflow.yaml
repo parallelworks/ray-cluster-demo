@@ -525,21 +525,21 @@ jobs:
                 ignore: ${{ inputs.workers.[index].resource.schedulerType != 'slurm' || inputs.workers.[index].scheduler == false }}
 
               gres:
-                label: GPUs (gres)
+                label: GPUs per Node (gres)
                 type: dropdown
                 default: ""
-                tooltip: GPU resource specification (--gres). Leave empty for CPU-only workers.
+                tooltip: "GPUs per node (--gres). For example, 4 GPUs/node × 2 nodes = 8 GPUs total."
                 options:
                   - value: ""
-                    label: "None"
+                    label: "None (CPU only)"
                   - value: "gpu:1"
-                    label: "1 GPU (gpu:1)"
+                    label: "1 GPU/node"
                   - value: "gpu:2"
-                    label: "2 GPUs (gpu:2)"
+                    label: "2 GPUs/node"
                   - value: "gpu:4"
-                    label: "4 GPUs (gpu:4)"
+                    label: "4 GPUs/node"
                   - value: "gpu:8"
-                    label: "8 GPUs (gpu:8)"
+                    label: "8 GPUs/node"
                 ignore: ${{ inputs.workers.[index].resource.schedulerType != 'slurm' || inputs.workers.[index].scheduler == false }}
 
               time:
