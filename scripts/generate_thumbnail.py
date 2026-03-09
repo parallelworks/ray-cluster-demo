@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a 512x512 thumbnail for the Ray Cluster Demo workflow.
+"""Generate a 512x512 thumbnail for the Multi-Site Ray Cluster workflow.
 
 Produces a network topology visualization showing two site clusters connected
 to a central Ray hub, with task dots flowing between them. Uses pure-Python

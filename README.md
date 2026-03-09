@@ -43,7 +43,7 @@ Three phases:
 3. **Scaling Test** — Compares multi-site vs single-site throughput
 
 ### Cluster Only
-Deploys the Ray cluster with no demo workload. The dashboard shows connection instructions with copy-paste commands for SSH tunnels, Ray job submission, and direct head node access. Use this mode to run your own Ray jobs, training scripts, or interactive workloads.
+Deploys the Ray cluster with no built-in workload. The dashboard shows connection instructions with copy-paste commands for SSH tunnels, Ray job submission, and direct head node access. Use this mode to run your own Ray jobs, training scripts, or interactive workloads.
 
 ## Worker Dispatch
 
@@ -65,7 +65,7 @@ Cross-site workers connect through SSH tunnels with unique loopback IPs (`127.0.
 ## Files
 
 ```
-ray-cluster-demo/
+ray-cluster/
 ├── workflow.yaml              # Multi-site workflow definition
 ├── README.md
 ├── ROADMAP.md                 # Future improvements and priorities

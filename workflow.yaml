@@ -23,7 +23,7 @@ jobs:
         ssh:
           remoteHost: ${{ inputs.head.resource.ip }}
         with:
-          repo: https://github.com/parallelworks/ray-cluster-demo.git
+          repo: https://github.com/parallelworks/ray-cluster.git
           branch: main
           sparse_checkout:
             - scripts
@@ -426,7 +426,7 @@ jobs:
           basepath="/me/session/${PW_USER}/${{ sessions.session }}"
           local_port="${{ needs.update_session.outputs.local_port }}"
           echo "=========================================="
-          echo "Multi-Site Ray Cluster Demo Complete!"
+          echo "Multi-Site Ray Cluster Ready!"
           echo "=========================================="
           echo "  Ray Version: ${{ inputs.ray_settings.ray_version }}"
           echo ""
@@ -632,7 +632,7 @@ jobs:
           workload_type:
             type: dropdown
             label: Workload Type
-            tooltip: Deploy a Ray cluster, or run a built-in demo workload (fractal rendering or benchmark)
+            tooltip: Deploy a Ray cluster, or run a built-in workload (fractal rendering or benchmark)
             default: cluster_only
             options:
               - value: cluster_only

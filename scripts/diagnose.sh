@@ -1,8 +1,8 @@
 #!/bin/bash
-# diagnose.sh — Run cluster diagnostics on an active ray-cluster-demo run
+# diagnose.sh — Run cluster diagnostics on an active ray-cluster run
 #
 # Usage: bash scripts/diagnose.sh [RUN_SLUG]
-#   e.g.: bash scripts/diagnose.sh ray-cluster-demo-00011
+#   e.g.: bash scripts/diagnose.sh ray_cluster_demo-00011
 #
 # Uses pw ssh to connect to the on-prem head node and run diagnostics.
 
@@ -11,7 +11,7 @@ set -e
 SLUG="${1:-}"
 if [ -z "$SLUG" ]; then
     echo "Usage: bash scripts/diagnose.sh <run-slug>"
-    echo "  e.g.: bash scripts/diagnose.sh ray-cluster-demo-00011"
+    echo "  e.g.: bash scripts/diagnose.sh ray_cluster_demo-00011"
     echo ""
     echo "Recent runs:"
     pw workflows runs list ray_cluster_demo -o json 2>/dev/null | \
