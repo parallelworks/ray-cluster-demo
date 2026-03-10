@@ -581,7 +581,8 @@ def gpu_matmul(task_id):
     host = socket.gethostname()
     gpu_ids = os.environ.get("CUDA_VISIBLE_DEVICES", "none")
     name = torch.cuda.get_device_name(0)
-    mem_gb = torch.cuda.get_device_properties(0).total_mem / 1e9
+    props = torch.cuda.get_device_properties(0)
+    mem_gb = (getattr(props, 'total_memory', 0) or getattr(props, 'total_mem', 0)) / 1e9
 
     # 4096x4096 matmul benchmark
     size = 4096
