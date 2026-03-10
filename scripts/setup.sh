@@ -58,6 +58,10 @@ if [ -f "${VENV_DIR}/bin/python" ]; then
     fi
     if [ "${PYTHON_OK}" = "true" ] && [ "${INSTALLED_VERSION}" == "${RAY_VERSION}" ]; then
         echo "Ray ${RAY_VERSION} already installed in ${VENV_DIR}, skipping."
+        # Ensure uv symlink exists in venv bin (may be missing from older installs)
+        if [ -x "${UV_BIN}" ] && [ ! -e "${VENV_DIR}/bin/uv" ]; then
+            ln -s "${UV_BIN}" "${VENV_DIR}/bin/uv"
+        fi
         echo "${VENV_DIR}" > "${JOB_DIR}/RAY_VENV_DIR"
         touch "${JOB_DIR}/SETUP_COMPLETE"
         exit 0
