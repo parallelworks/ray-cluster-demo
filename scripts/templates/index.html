@@ -110,6 +110,9 @@
     padding: 0.75rem 1rem;
     overflow: hidden;
   }
+  .cluster-view.no-throughput {
+    grid-template-rows: 1fr;
+  }
   .cluster-view .chart-row {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -874,6 +877,7 @@ function switchTab(tab) {
     clusterView.classList.remove('view-hidden');
     throughputMini.style.display = workloadType === 'cluster_only' ? 'none' : '';
     document.getElementById('throughput-row').style.display = workloadType === 'cluster_only' ? 'none' : '';
+    clusterView.classList.toggle('no-throughput', workloadType === 'cluster_only');
     if (workloadType === 'benchmark') resultsCard.style.display = '';
     else resultsCard.style.display = 'none';
     rayIframe.src = 'about:blank';
@@ -1708,6 +1712,7 @@ function connect() {
           document.getElementById('tab-cluster-only').classList.remove('hidden');
           document.getElementById('throughput-row').style.display = 'none';
           document.getElementById('throughput-mini-card').style.display = 'none';
+          document.getElementById('cluster-view').classList.add('no-throughput');
         }
       }
 
@@ -1746,6 +1751,7 @@ function connect() {
             document.getElementById('tab-cluster-only').classList.remove('hidden');
             document.getElementById('throughput-row').style.display = 'none';
             document.getElementById('throughput-mini-card').style.display = 'none';
+            document.getElementById('cluster-view').classList.add('no-throughput');
             switchTab('cluster-only');
           } else if (data.workload_type === 'fractal') {
             workloadType = 'fractal';
@@ -1834,6 +1840,7 @@ function connect() {
           document.getElementById('tab-cluster-only').classList.remove('hidden');
           document.getElementById('throughput-row').style.display = 'none';
           document.getElementById('throughput-mini-card').style.display = 'none';
+          document.getElementById('cluster-view').classList.add('no-throughput');
           switchTab('cluster-only');
         }
       } else {
