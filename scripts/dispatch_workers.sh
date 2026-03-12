@@ -540,11 +540,49 @@ dispatch_worker() {
         fi
     done
 
-    # Allocate 2 ports on the remote for pw ssh tunnels (dashboard + Ray GCS)
-    # Note: || true prevents set -e from killing background dispatch on pw ssh failure
+    # Determine SSH connectivity mode: pw proxy (by name) or direct (by IP)
+    local SSH_MODE="pw"
+    local SSH_TARGET="${site_name}"
+    local PORT_ALLOC_CMD='python3 -c "import socket; s=socket.socket(); s.bind((\"\",0)); print(s.getsockname()[1]); s.close()"'
+
+    # Test pw ssh connectivity first
+    local pw_test
+    pw_test=$(${PW_CMD} ssh "${site_name}" 'echo ok' 2>&1) || true
+    if [ "${pw_test}" != "ok" ]; then
+        echo "[${site_name}] pw ssh not available (${pw_test})"
+        if [ -n "${site_ip}" ]; then
+            echo "[${site_name}] Falling back to direct SSH via ${site_ip}"
+            SSH_MODE="direct"
+            SSH_TARGET="${site_ip}"
+        else
+            echo "[${site_name}] [ERROR] pw ssh failed and no IP available for fallback"
+            return 1
+        fi
+    fi
+
+    # Build base SSH args depending on mode
+    local SSH_BASE_ARGS=()
+    if [ "${SSH_MODE}" = "pw" ]; then
+        SSH_BASE_ARGS=(
+            -i ~/.ssh/pwcli
+            -o StrictHostKeyChecking=no
+            -o UserKnownHostsFile=/dev/null
+            -o ConnectTimeout=30
+            -o "ProxyCommand=${PW_CMD} ssh --proxy-command %h"
+        )
+    else
+        SSH_BASE_ARGS=(
+            -i ~/.ssh/pwcli
+            -o StrictHostKeyChecking=no
+            -o UserKnownHostsFile=/dev/null
+            -o ConnectTimeout=30
+        )
+    fi
+
+    # Allocate 2 ports on the remote for tunnels (dashboard + Ray GCS)
+    # Note: || true prevents set -e from killing background dispatch on ssh failure
     local tunnel_dashboard_port
-    tunnel_dashboard_port=$(${PW_CMD} ssh "${site_name}" \
-        'python3 -c "import socket; s=socket.socket(); s.bind((\"\",0)); print(s.getsockname()[1]); s.close()"' 2>&1) || true
+    tunnel_dashboard_port=$(ssh "${SSH_BASE_ARGS[@]}" "${PW_USER}@${SSH_TARGET}" "${PORT_ALLOC_CMD}" 2>&1) || true
 
     if [ -z "${tunnel_dashboard_port}" ] || ! [[ "${tunnel_dashboard_port}" =~ ^[0-9]+$ ]]; then
         echo "[${site_name}] [ERROR] Failed to allocate dashboard tunnel port (got: '${tunnel_dashboard_port}')"
@@ -552,8 +590,7 @@ dispatch_worker() {
     fi
 
     local tunnel_ray_port
-    tunnel_ray_port=$(${PW_CMD} ssh "${site_name}" \
-        'python3 -c "import socket; s=socket.socket(); s.bind((\"\",0)); print(s.getsockname()[1]); s.close()"' 2>&1) || true
+    tunnel_ray_port=$(ssh "${SSH_BASE_ARGS[@]}" "${PW_USER}@${SSH_TARGET}" "${PORT_ALLOC_CMD}" 2>&1) || true
 
     if [ -z "${tunnel_ray_port}" ] || ! [[ "${tunnel_ray_port}" =~ ^[0-9]+$ ]]; then
         echo "[${site_name}] [ERROR] Failed to allocate Ray tunnel port (got: '${tunnel_ray_port}')"
@@ -567,15 +604,11 @@ dispatch_worker() {
 
     # Build SSH args with bidirectional tunnels
     local SSH_ARGS=(
-        -i ~/.ssh/pwcli
-        -o StrictHostKeyChecking=no
-        -o UserKnownHostsFile=/dev/null
+        "${SSH_BASE_ARGS[@]}"
         -o ExitOnForwardFailure=yes
-        -o ConnectTimeout=30
         -o ServerAliveInterval=15
         -o ServerAliveCountMax=120
         -o TCPKeepAlive=yes
-        -o "ProxyCommand=${PW_CMD} ssh --proxy-command %h"
     )
 
     # Reverse tunnels: remote site can reach head node's Ray GCS + dashboard
@@ -1863,9 +1896,9 @@ WORKER_SCRIPT
     fi
 
     # Pipe script via stdin to avoid quoting issues with SSH command strings
-    echo "[${site_name}] Connecting via SSH (PW proxy)..."
+    echo "[${site_name}] Connecting via SSH (${SSH_MODE} mode, target: ${SSH_TARGET})..."
     set -o pipefail
-    ssh "${SSH_ARGS[@]}" "${PW_USER}@${site_name}" 'bash -s' < "${script_file}" 2>&1 | \
+    ssh "${SSH_ARGS[@]}" "${PW_USER}@${SSH_TARGET}" 'bash -s' < "${script_file}" 2>&1 | \
         sed -u "s/^/[${site_name}] /"
     local ssh_exit=$?
     set +o pipefail
