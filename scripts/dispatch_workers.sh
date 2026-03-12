@@ -794,15 +794,23 @@ else:
     fi
     echo "SSH tunnel target: \${LOGIN_IP}"
 
+    # Get compute node's own IP — bind tunnel here so Ray uses a routable IP
+    # (Ray replaces 127.0.0.1 with the node's detected IP, breaking the tunnel)
+    COMPUTE_IP=\$(hostname -I 2>/dev/null | awk '{print \$1}')
+    if [ -z "\${COMPUTE_IP}" ] || [[ "\${COMPUTE_IP}" == 127.* ]]; then
+        COMPUTE_IP="127.0.0.1"
+    fi
+    echo "Compute node IP: \${COMPUTE_IP}"
+
     ssh -F /dev/null -f -N -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-        -L "\${LOCAL_RAY_PORT}:127.0.0.1:\${PROXY_RAY_PORT}" \
-        -L "\${LOCAL_DASH_PORT}:127.0.0.1:\${PROXY_DASH_PORT}" \
+        -L "\${COMPUTE_IP}:\${LOCAL_RAY_PORT}:127.0.0.1:\${PROXY_RAY_PORT}" \
+        -L "\${COMPUTE_IP}:\${LOCAL_DASH_PORT}:127.0.0.1:\${PROXY_DASH_PORT}" \
         "\${LOGIN_IP}" 2>&1
     SSH_RC=\$?
 
     if [ \${SSH_RC} -eq 0 ]; then
-        echo "SSH tunnel established: localhost:\${LOCAL_RAY_PORT} -> \${LOGIN_HOST}:\${PROXY_RAY_PORT}"
-        RAY_CONNECT_HOST="127.0.0.1"
+        echo "SSH tunnel established: \${COMPUTE_IP}:\${LOCAL_RAY_PORT} -> \${LOGIN_HOST}:\${PROXY_RAY_PORT}"
+        RAY_CONNECT_HOST="\${COMPUTE_IP}"
         PROXY_RAY_PORT=\${LOCAL_RAY_PORT}
         PROXY_DASH_PORT=\${LOCAL_DASH_PORT}
     else
@@ -1357,15 +1365,23 @@ else:
     fi
     echo "SSH tunnel target: \${LOGIN_IP}"
 
+    # Get compute node's own IP — bind tunnel here so Ray uses a routable IP
+    # (Ray replaces 127.0.0.1 with the node's detected IP, breaking the tunnel)
+    COMPUTE_IP=\$(hostname -I 2>/dev/null | awk '{print \$1}')
+    if [ -z "\${COMPUTE_IP}" ] || [[ "\${COMPUTE_IP}" == 127.* ]]; then
+        COMPUTE_IP="127.0.0.1"
+    fi
+    echo "Compute node IP: \${COMPUTE_IP}"
+
     ssh -F /dev/null -f -N -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-        -L "\${LOCAL_RAY_PORT}:127.0.0.1:\${PROXY_RAY_PORT}" \
-        -L "\${LOCAL_DASH_PORT}:127.0.0.1:\${PROXY_DASH_PORT}" \
+        -L "\${COMPUTE_IP}:\${LOCAL_RAY_PORT}:127.0.0.1:\${PROXY_RAY_PORT}" \
+        -L "\${COMPUTE_IP}:\${LOCAL_DASH_PORT}:127.0.0.1:\${PROXY_DASH_PORT}" \
         "\${LOGIN_IP}" 2>&1
     SSH_RC=\$?
 
     if [ \${SSH_RC} -eq 0 ]; then
-        echo "SSH tunnel established: localhost:\${LOCAL_RAY_PORT} -> \${LOGIN_HOST}:\${PROXY_RAY_PORT}"
-        RAY_CONNECT_HOST="127.0.0.1"
+        echo "SSH tunnel established: \${COMPUTE_IP}:\${LOCAL_RAY_PORT} -> \${LOGIN_HOST}:\${PROXY_RAY_PORT}"
+        RAY_CONNECT_HOST="\${COMPUTE_IP}"
         PROXY_RAY_PORT=\${LOCAL_RAY_PORT}
         PROXY_DASH_PORT=\${LOCAL_DASH_PORT}
     else
