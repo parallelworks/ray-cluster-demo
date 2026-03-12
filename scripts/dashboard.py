@@ -44,6 +44,10 @@ state = {
     "fractal_tiles": {},  # (tx, ty) string key -> tile data
     # Pending sites (dispatched but workers not yet connected)
     "pending_sites": {},  # site_id -> {cluster_name, scheduler_type}
+    # Throughput time series (built by poller from Ray task count deltas)
+    "throughput_history": [],  # [{ts: epoch, total: tasks/s, perSite: {site_id: rate}}]
+    "_prev_completed": 0,     # previous total_completed for delta calc
+    "_prev_site_counts": {},  # previous per-site task_counts
 }
 connected_ws = []  # list of WebSocket
 
@@ -65,6 +69,9 @@ def _reset_state():
     state["fractal_tiles"] = {}
     state["_seen_jobs"] = {}
     state["_ray_task_counts"] = {}
+    state["throughput_history"] = []
+    state["_prev_completed"] = 0
+    state["_prev_site_counts"] = {}
     global _dashboard_start_time
     _dashboard_start_time = time.time()
     # Preserve pending_sites and head_node across config resets — they are set
@@ -74,31 +81,8 @@ def _reset_state():
 
 
 def _compute_throughput_history():
-    """Build per-second throughput buckets from task completion times."""
-    if not state["start_time"] or not state["tasks"]:
-        return []
-    arrivals = []
-    for t in state["tasks"]:
-        ts = t.get("completed_at", 0)
-        if ts > 0:
-            arrivals.append((ts - state["start_time"], t.get("site_id", "unknown")))
-    if not arrivals:
-        return []
-    arrivals.sort()
-    max_t = arrivals[-1][0]
-    buckets = []
-    bucket_start = 0
-    while bucket_start <= max_t:
-        bucket_end = bucket_start + 1.0
-        per_site = {}
-        total = 0
-        for rel_t, sid in arrivals:
-            if bucket_start <= rel_t < bucket_end:
-                per_site[sid] = per_site.get(sid, 0) + 1
-                total += 1
-        buckets.append({"ts_offset": round(bucket_start, 1), "total": total, "perSite": per_site})
-        bucket_start += 1.0
-    return buckets
+    """Return throughput time series from poller-tracked deltas."""
+    return state.get("throughput_history", [])
 
 
 async def _broadcast(msg_dict):
@@ -455,6 +439,35 @@ async def _poll_ray_api():
                                 distributed,
                             )
                     changed = True
+
+            # --- Build throughput time series from task count deltas ---
+            current_completed = state["total_completed"]
+            prev_completed = state.get("_prev_completed", 0)
+            if current_completed > prev_completed and state["start_time"] is not None:
+                delta_total = current_completed - prev_completed
+                # Per-site deltas
+                per_site = {}
+                for sid, stats in state["site_stats"].items():
+                    current_count = stats.get("task_count", 0)
+                    prev_count = state["_prev_site_counts"].get(sid, 0)
+                    if current_count > prev_count:
+                        per_site[sid] = current_count - prev_count
+                state["throughput_history"].append({
+                    "ts": time.time(),
+                    "ts_offset": round(time.time() - state["start_time"], 1),
+                    "total": delta_total,
+                    "perSite": per_site,
+                })
+                # Keep last 300 entries (~5 min at 1s poll interval)
+                if len(state["throughput_history"]) > 300:
+                    state["throughput_history"] = state["throughput_history"][-300:]
+                changed = True
+
+            state["_prev_completed"] = current_completed
+            state["_prev_site_counts"] = {
+                sid: stats.get("task_count", 0)
+                for sid, stats in state["site_stats"].items()
+            }
 
             logged_first = True
 
