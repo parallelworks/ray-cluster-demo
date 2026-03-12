@@ -36,6 +36,31 @@ jobs:
           set -e
           CLUSTER_JOB_DIR="${{ inputs.cluster_job_dir }}"
 
+          # Auto-detect: find the latest job directory with RAY_HEAD_IP
+          if [ -z "${CLUSTER_JOB_DIR}" ] || [ "${CLUSTER_JOB_DIR}" = "auto" ]; then
+            echo "Auto-detecting latest Ray cluster job..."
+            FOUND=""
+            # Search all workflow job directories for the latest run with coordination files
+            for workflow_dir in ~/pw/jobs/*/; do
+              [ ! -d "${workflow_dir}" ] && continue
+              # Find the highest-numbered subdirectory with RAY_HEAD_IP
+              latest=$(ls -1d "${workflow_dir}"[0-9]* 2>/dev/null | sort -V | tail -1)
+              if [ -n "${latest}" ] && [ -f "${latest}/RAY_HEAD_IP" ] && [ -f "${latest}/job.started" ]; then
+                # Pick the most recently modified one
+                if [ -z "${FOUND}" ] || [ "${latest}/RAY_HEAD_IP" -nt "${FOUND}/RAY_HEAD_IP" ]; then
+                  FOUND="${latest}"
+                fi
+              fi
+            done
+            if [ -z "${FOUND}" ]; then
+              echo "ERROR: Could not find any Ray cluster job directories."
+              echo "Ensure the original Ray cluster workflow has been run at least once."
+              exit 1
+            fi
+            CLUSTER_JOB_DIR="${FOUND}"
+            echo "Found: ${CLUSTER_JOB_DIR}"
+          fi
+
           echo "=========================================="
           echo "Validating existing Ray cluster"
           echo "=========================================="
@@ -249,10 +274,11 @@ jobs:
       cluster_job_dir:
         type: string
         label: Cluster Job Directory
+        default: "auto"
         tooltip: |
-          The PW_PARENT_JOB_DIR of the running Ray cluster workflow.
-          Find this in the original workflow's logs (e.g., /home/user/pw/jobs/001234).
-          This directory contains coordination files (RAY_HEAD_IP, SESSION_PORT, etc.).
+          The job directory of the running Ray cluster workflow. Set to "auto" to
+          automatically find the latest Ray cluster run, or specify a full path
+          (e.g., ~/pw/jobs/raycluster/00032).
 
       # -----------------------------------------------------------------------
       # New Compute Workers
