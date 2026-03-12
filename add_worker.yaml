@@ -377,6 +377,7 @@ jobs:
               scheduler_directives:
                 type: editor
                 label: Additional Directives
+                default: "##SBATCH --constraint=mla  # uncomment for Navy and AFRL DSRC systems"
                 optional: true
                 tooltip: Additional SLURM directives (include #SBATCH prefix)
                 ignore: ${{ inputs.workers.[index].resource.schedulerType != 'slurm' || inputs.workers.[index].scheduler == false }}
