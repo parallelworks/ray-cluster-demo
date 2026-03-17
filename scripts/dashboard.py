@@ -615,6 +615,19 @@ async def register_worker(request: Request):
     node_ip = body.get("worker_ip", "unknown")
     site_id = body.get("site_id", "unknown")
 
+    # If this node was already registered under a different site (e.g. by the
+    # Ray poller using hostname before this POST arrived), clean up the old site.
+    old_node = state["nodes"].get(node_ip)
+    if old_node and old_node.get("site_id") and old_node["site_id"] != site_id:
+        old_sid = old_node["site_id"]
+        if old_sid in state["site_stats"]:
+            old_stats = state["site_stats"][old_sid]
+            if node_ip in old_stats.get("node_ips", []):
+                old_stats["node_ips"].remove(node_ip)
+            old_stats["num_workers"] = max(0, old_stats.get("num_workers", 1) - 1)
+            if old_stats["num_workers"] <= 0 and not old_stats.get("node_ips"):
+                del state["site_stats"][old_sid]
+
     state["nodes"][node_ip] = {
         "site_id": site_id,
         "num_cpus": body.get("num_cpus", 1),
