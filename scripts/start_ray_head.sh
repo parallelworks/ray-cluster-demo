@@ -1,4 +1,5 @@
 #!/bin/bash
+if [ -z "${BASH_VERSION:-}" ]; then exec /bin/bash "$0" "$@"; fi
 # start_ray_head.sh — Start Ray head node + custom dashboard
 #
 # The head is a pure coordinator (--num-cpus=0): no compute tasks run here.
@@ -27,6 +28,11 @@ echo "Ray Head + Dashboard Starting: $(date)"
 echo "=========================================="
 echo "Hostname: $(hostname)"
 echo "Job dir:  ${PW_PARENT_JOB_DIR}"
+
+# Verify bash is available and warn on csh/tcsh login shells
+if [ -x "${SCRIPT_DIR}/check_shell.sh" ]; then
+    "${SCRIPT_DIR}/check_shell.sh" || exit 1
+fi
 
 # Verify scripts were checked out
 if [ ! -f "${SCRIPT_DIR}/dashboard.py" ]; then

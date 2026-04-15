@@ -1,4 +1,5 @@
 #!/bin/bash
+if [ -z "${BASH_VERSION:-}" ]; then exec /bin/bash "$0" "$@"; fi
 # setup.sh — Install Ray into a virtual environment
 #
 # Handles HPC systems with old Python (e.g., 3.6) by bootstrapping a modern

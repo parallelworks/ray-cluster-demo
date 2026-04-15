@@ -1,4 +1,5 @@
 #!/bin/bash
+if [ -z "${BASH_VERSION:-}" ]; then exec /bin/bash "$0" "$@"; fi
 # diagnose.sh — Run cluster diagnostics on an active ray-cluster run
 #
 # Usage: bash scripts/diagnose.sh [RUN_SLUG]

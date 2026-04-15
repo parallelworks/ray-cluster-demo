@@ -1,4 +1,9 @@
 #!/bin/bash
+# Re-exec under bash if invoked from a non-bash shell (tcsh/csh/sh).
+# The script relies on bash-only syntax throughout (arrays, [[ ]], $(),
+# process substitution, parameter expansion), so a tcsh user running
+# `./dispatch_workers.sh` would fail on the first construct.
+if [ -z "${BASH_VERSION:-}" ]; then exec /bin/bash "$0" "$@"; fi
 # dispatch_workers.sh — Dispatch Ray workers to compute sites
 #
 # Runs on the head node. For each worker site:

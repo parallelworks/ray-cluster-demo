@@ -1,4 +1,5 @@
 #!/bin/bash
+if [ -z "${BASH_VERSION:-}" ]; then exec /bin/bash "$0" "$@"; fi
 # run_benchmark.sh — Submit Ray benchmark and stream results to dashboard
 #
 # Environment variables:
