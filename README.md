@@ -77,8 +77,21 @@ ray-cluster/
     ├── run_benchmark.sh       # Run benchmark, POST results to dashboard
     ├── benchmark.py           # Ray distributed benchmark + fractal tasks
     ├── dashboard.py           # FastAPI live dashboard server (WebSocket)
+    ├── check_shell.sh         # POSIX sh shell-compat check (bash present, warn on csh/tcsh)
     ├── diagnose.sh            # Cluster diagnostic tool
     ├── diagnose_cluster.py    # Ray cluster health checker
     └── templates/
         └── index.html         # Dashboard UI
 ```
+
+## Shell Compatibility
+
+The workflow requires **bash** on every node (head and workers). It supports users whose **login shell** is bash, sh, or tcsh/csh — the scripts do not care about the interactive login shell, only that `/bin/bash` exists.
+
+How it stays compatible:
+- Every entry-point script starts with `#!/bin/bash` and re-execs under bash if invoked from a non-bash parent: `if [ -z "${BASH_VERSION:-}" ]; then exec /bin/bash "$0" "$@"; fi`.
+- Remote dispatch uses `ssh host 'bash -s' < script.sh` — bypasses the remote login shell entirely.
+- Scheduler jobs (SLURM/PBS) carry `#!/bin/bash` shebangs, which the scheduler honors regardless of the submitting user's shell.
+- `scripts/check_shell.sh` runs at head-node startup to confirm `/bin/bash` is available and print a note if `$SHELL` is in the csh family.
+
+Caveat for tcsh users: sourcing the Python venv interactively (`source .venv/bin/activate`) fails under tcsh because the script uses bash `export`. Use `source .venv/bin/activate.csh` instead, or drop into bash with `bash -l`.
