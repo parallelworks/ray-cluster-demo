@@ -30,6 +30,12 @@ UV_DIR="${SOFTWARE_DIR}/.uv"
 UV_BIN="${UV_DIR}/uv"
 # Keep uv cache out of HOME to avoid filling small HOME quotas
 export UV_CACHE_DIR="${SOFTWARE_DIR}/.uv-cache"
+# Use the OS cert store for HTTPS. Some HPC networks (notably DoD sites)
+# terminate TLS at an inspection proxy with a private CA — uv's bundled
+# rustls store doesn't trust it, so PyPI fetches fail with
+# "invalid peer certificate: UnknownIssuer". The system trust chain
+# includes the local CA on these networks.
+export UV_NATIVE_TLS=true
 MIN_PYTHON="3.9"
 TARGET_PYTHON="3.12"
 
