@@ -142,6 +142,22 @@ fi
 echo ""
 echo "Installing Ray ${RAY_VERSION}..."
 
+# Reaching this point means the precheck did NOT short-circuit out — either
+# no venv existed, or the existing one couldn't import ray at the right
+# version. In every "needs install" path, wipe any leftover directory before
+# creating a fresh venv. Two real-world failures motivated this:
+#   1. An empty/partial VENV_DIR with no bin/python made
+#      `uv pip install --python <venv>/bin/python ...` error out
+#      with "No virtual environment or system Python installation found".
+#   2. A half-installed prior run left dist-info dirs missing their METADATA
+#      files; `uv pip install` cannot heal that and fails on every retry.
+# Always starting from a clean slate is slower than reusing a healthy venv,
+# but the precheck path above still skips this when the venv is already good.
+if [ -e "${VENV_DIR}" ]; then
+    echo "Removing stale/incomplete venv at ${VENV_DIR}..."
+    rm -rf "${VENV_DIR}"
+fi
+
 if install_uv; then
     if [ "${NEED_PYTHON_BOOTSTRAP}" = "true" ]; then
         # Use uv to download a standalone Python build
@@ -154,18 +170,21 @@ if install_uv; then
     UV_PYTHON="${PYTHON_MICRO_VERSION:-${TARGET_PYTHON}}"
     echo "Python version for venv: ${UV_PYTHON}"
 
-    if [ ! -d "${VENV_DIR}" ]; then
-        ${UV_BIN} venv "${VENV_DIR}" --python "${UV_PYTHON}"
-    fi
+    ${UV_BIN} venv "${VENV_DIR}" --python "${UV_PYTHON}"
+
     # Try ray[default] first (includes built-in dashboard).
     # Fall back to ray (no extras) if it fails on restricted networks.
+    # The retry wipes the venv first — a failed `uv pip install` may leave
+    # partial dist-info dirs that block subsequent installs.
     echo "Attempting ray[default] install (includes Ray dashboard)..."
     if UV_HTTP_TIMEOUT=120 ${UV_BIN} pip install --python "${VENV_DIR}/bin/python" \
         "ray[default]==${RAY_VERSION}" numpy fastapi uvicorn websockets httpx 2>&1; then
         echo "ray[default] installed successfully"
     else
         echo ""
-        echo "[WARN] ray[default] failed — retrying with minimal ray (no built-in dashboard)"
+        echo "[WARN] ray[default] failed — recreating venv and retrying with minimal ray (no built-in dashboard)"
+        rm -rf "${VENV_DIR}"
+        ${UV_BIN} venv "${VENV_DIR}" --python "${UV_PYTHON}"
         UV_HTTP_TIMEOUT=120 ${UV_BIN} pip install --python "${VENV_DIR}/bin/python" \
             "ray==${RAY_VERSION}" numpy fastapi uvicorn websockets httpx
     fi
@@ -177,13 +196,14 @@ else
         exit 1
     fi
     echo "Using pip..."
-    if [ ! -d "${VENV_DIR}" ]; then
-        ${PYTHON_CMD} -m venv "${VENV_DIR}"
-    fi
+    ${PYTHON_CMD} -m venv "${VENV_DIR}"
     "${VENV_DIR}/bin/python" -m pip install --quiet --upgrade pip
     "${VENV_DIR}/bin/python" -m pip install --quiet \
         "ray[default]==${RAY_VERSION}" numpy fastapi uvicorn websockets httpx 2>&1 || {
-        echo "[WARN] ray[default] failed — retrying with minimal ray"
+        echo "[WARN] ray[default] failed — recreating venv and retrying with minimal ray"
+        rm -rf "${VENV_DIR}"
+        ${PYTHON_CMD} -m venv "${VENV_DIR}"
+        "${VENV_DIR}/bin/python" -m pip install --quiet --upgrade pip
         "${VENV_DIR}/bin/python" -m pip install --quiet \
             "ray==${RAY_VERSION}" numpy fastapi uvicorn websockets httpx
     }
