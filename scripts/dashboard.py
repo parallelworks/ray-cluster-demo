@@ -203,43 +203,24 @@ async def _poll_ray_api():
                         "alive": alive, "is_head": is_head,
                     })
 
-                    # Sync worker nodes into state["nodes"] for topology
-                    # Skip the head node (coordinator)
-                    if alive and ip and not is_head and cpus > 0:
-                        if ip not in state["nodes"]:
-                            site_id = f"site-{hostname.split('.')[0]}" if hostname else f"site-{ip}"
-                            state["nodes"][ip] = {
-                                "site_id": site_id,
-                                "num_cpus": int(cpus),
-                                "num_gpus": int(gpus),
-                                "cluster_name": hostname.split(".")[0] if hostname else ip,
-                                "scheduler_type": "",
-                                "joined_at": time.time(),
-                            }
-                            # Initialize site_stats for topology rendering
-                            if site_id not in state["site_stats"]:
-                                state["site_stats"][site_id] = {
-                                    "task_count": 0,
-                                    "total_ms": 0,
-                                    "cluster_name": hostname.split(".")[0] if hostname else ip,
-                                    "scheduler_type": "",
-                                    "num_workers": 0,
-                                    "node_ips": [],
-                                }
-                            stats = state["site_stats"][site_id]
-                            stats["num_workers"] += 1
-                            if ip not in stats["node_ips"]:
-                                stats["node_ips"].append(ip)
+                    # Refresh CPU/GPU counts from Ray on already-registered nodes.
+                    # We deliberately do NOT create new topology entries here:
+                    # /api/worker is the single source of truth for site_id +
+                    # cluster_name (it carries the dispatcher-provided values).
+                    # If the poller synthesized a site_id from hostname before
+                    # /api/worker arrived, the synthesized entry would race
+                    # with the canonical one and surface in the dashboard as
+                    # duplicate/wrong-name nodes (e.g. "makau03" instead of
+                    # "makau"). Letting /api/worker be authoritative removes
+                    # the race entirely.
+                    if alive and ip and not is_head and cpus > 0 and ip in state["nodes"]:
+                        node_data = state["nodes"][ip]
+                        if int(gpus) != node_data.get("num_gpus", 0):
+                            node_data["num_gpus"] = int(gpus)
                             changed = True
-                        else:
-                            # Update GPU/CPU counts from Ray (authoritative source)
-                            node_data = state["nodes"][ip]
-                            if int(gpus) != node_data.get("num_gpus", 0):
-                                node_data["num_gpus"] = int(gpus)
-                                changed = True
-                            if int(cpus) != node_data.get("num_cpus", 0):
-                                node_data["num_cpus"] = int(cpus)
-                                changed = True
+                        if int(cpus) != node_data.get("num_cpus", 0):
+                            node_data["num_cpus"] = int(cpus)
+                            changed = True
 
                 state["ray_cluster_nodes"] = ray_info
 
