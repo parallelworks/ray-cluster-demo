@@ -1910,9 +1910,37 @@ echo "  Connected to: 127.0.0.1:\${PROXY_RAY_PORT} (proxy -> 127.0.0.1:${tunnel_
 echo "  Worker IP: ${ip}"
 echo "=========================================="
 
-# Keep SSH session alive
+# Keep SSH session alive AND watch for raylet death. If \`ray status\` fails
+# for several consecutive checks the raylet is gone (typically SIGKILLed —
+# on HPC login nodes, process-policy enforcers like ma_healthcheck on
+# HPCMP sites reap user daemons). Post a context-aware error to the
+# dashboard so the user sees what happened and how to fix it.
+CONSECUTIVE_FAILS=0
+DEATH_THRESHOLD=3
 while true; do
-    ray status 2>/dev/null || echo "Worker health check: \$(date)"
+    if ray status >/dev/null 2>&1; then
+        CONSECUTIVE_FAILS=0
+    else
+        CONSECUTIVE_FAILS=\$((CONSECUTIVE_FAILS + 1))
+        echo "Worker health check FAILED (\${CONSECUTIVE_FAILS}/\${DEATH_THRESHOLD}): \$(date)"
+        if [ \${CONSECUTIVE_FAILS} -ge \${DEATH_THRESHOLD} ]; then
+            ERR_MSG="Ray worker died unexpectedly (raylet stopped responding)."
+            if [ "\${SCHED_TYPE}" = "slurm" ] || [ "\${SCHED_TYPE}" = "pbs" ]; then
+                ERR_MSG="\${ERR_MSG} HPC login nodes often run process-policy enforcers (e.g. ma_healthcheck on HPCMP) that SIGKILL user daemons. Set use_scheduler=true so the worker runs on a SLURM/PBS compute node instead of the login node."
+            fi
+            echo "Reporting worker death to dashboard: \${ERR_MSG}"
+            curl -s --connect-timeout 5 -X POST "\${DASHBOARD_URL}/api/worker/error" \\
+                -H "Content-Type: application/json" \\
+                -d "{
+                    \"site_id\": \"${site_id}\",
+                    \"cluster_name\": \"\${CLUSTER_NAME}\",
+                    \"scheduler_type\": \"\${SCHED_TYPE}\",
+                    \"error\": \"\${ERR_MSG}\"
+                }" 2>/dev/null || true
+            echo "Worker exiting — SSH session will end"
+            exit 1
+        fi
+    fi
     sleep 30
 done
 WORKER_SCRIPT

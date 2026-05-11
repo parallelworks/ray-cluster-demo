@@ -591,19 +591,56 @@ async def worker_pending(request: Request):
 
 @app.post("/api/worker/error")
 async def worker_error(request: Request):
-    """Report a worker dispatch failure (e.g. sbatch rejected)."""
+    """Report a worker failure.
+
+    Called in two situations:
+      1. Pre-connection: sbatch/qsub rejected, SSH failed, setup crashed.
+      2. Post-connection: the worker keep-alive detected raylet death (e.g.
+         a login-node process enforcer SIGKILLed Ray). The site was already
+         showing as connected — we need to evict its node from the topology
+         and surface the error on a pending/failed card instead.
+    """
     body = await request.json()
     site_id = body.get("site_id", "unknown")
     error_msg = body.get("error", "Unknown error")
-    # Update pending site with error state
-    if site_id in state["pending_sites"]:
-        state["pending_sites"][site_id]["error"] = error_msg
-    else:
-        state["pending_sites"][site_id] = {"error": error_msg}
+    cluster_name = body.get("cluster_name", "") or ""
+    scheduler_type = body.get("scheduler_type", "") or ""
+
+    # If the site was previously connected, tear its topology entry down so
+    # the dashboard doesn't keep showing it as alive.
+    if site_id in state["site_stats"]:
+        old_stats = state["site_stats"].pop(site_id)
+        if not cluster_name:
+            cluster_name = old_stats.get("cluster_name", "")
+        if not scheduler_type:
+            scheduler_type = old_stats.get("scheduler_type", "")
+        # Drop every node that belonged to this site.
+        for ip in [ip for ip, n in state["nodes"].items() if n.get("site_id") == site_id]:
+            state["nodes"].pop(ip, None)
+
+    # Preserve any prior pending_sites context (e.g. cluster_name set during
+    # the initial pending notification) so the failure card stays labeled.
+    existing = state["pending_sites"].get(site_id, {})
+    if not cluster_name:
+        cluster_name = existing.get("cluster_name", "")
+    if not scheduler_type:
+        scheduler_type = existing.get("scheduler_type", "")
+
+    state["pending_sites"][site_id] = {
+        "cluster_name": cluster_name,
+        "scheduler_type": scheduler_type,
+        "error": error_msg,
+    }
+
     await _broadcast({
         "type": "worker_error",
         "site_id": site_id,
         "error": error_msg,
+        "cluster_name": cluster_name,
+        "scheduler_type": scheduler_type,
+        "nodes": state["nodes"],
+        "site_stats": _safe_site_stats(),
+        "pending_sites": state["pending_sites"],
     })
     return {"status": "ok"}
 

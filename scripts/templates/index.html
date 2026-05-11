@@ -1697,11 +1697,19 @@ function connect() {
       return;
     }
     if (msg.type === 'worker_error') {
-      if (pendingSites[msg.site_id]) {
-        pendingSites[msg.site_id].error = msg.error;
-      } else {
-        pendingSites[msg.site_id] = {error: msg.error};
+      // Server may have torn down a previously-connected site (raylet died
+      // post-connection) — drop its topology entries on the client too so we
+      // don't render both the dead node and the failure card.
+      if (msg.nodes) Object.keys(rayNodes).forEach(ip => { if (!msg.nodes[ip]) delete rayNodes[ip]; });
+      if (msg.site_stats) {
+        Object.keys(siteStats).forEach(sid => { if (!msg.site_stats[sid]) delete siteStats[sid]; });
       }
+      const prev = pendingSites[msg.site_id] || {};
+      pendingSites[msg.site_id] = {
+        cluster_name: msg.cluster_name || prev.cluster_name || '',
+        scheduler_type: msg.scheduler_type || prev.scheduler_type || '',
+        error: msg.error,
+      };
       getSiteColor(msg.site_id);
       if (activeTab === 'cluster') drawTopology();
       updateStats();
