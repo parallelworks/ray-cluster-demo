@@ -259,6 +259,56 @@ async def _poll_ray_api():
                     _poll_log.info(f"Removed dead node {ip} (site: {site_id})")
                     changed = True
 
+                # Reconcile: Ray reports an alive worker that never POSTed to
+                # /api/worker (lost notification, e.g. tunnel proxy crashed
+                # mid-startup). Match by hostname against a pending site's
+                # cluster_name — if unique, promote pending → nodes so the
+                # dashboard reflects what Ray actually sees.
+                ghosts = [
+                    n for n in ray_info
+                    if n["alive"] and not n["is_head"] and n["ip"] not in state["nodes"]
+                ]
+                for ghost in ghosts:
+                    hostname = (ghost.get("hostname") or "").lower()
+                    matches = [
+                        (sid, p) for sid, p in state["pending_sites"].items()
+                        if not p.get("error")
+                        and p.get("cluster_name")
+                        and (
+                            p["cluster_name"].lower() in hostname
+                            or hostname.startswith(p["cluster_name"].lower()[:3])
+                        )
+                    ]
+                    if len(matches) != 1:
+                        continue
+                    site_id, pending = matches[0]
+                    cluster_name = pending.get("cluster_name", "")
+                    scheduler_type = pending.get("scheduler_type", "")
+                    state["nodes"][ghost["ip"]] = {
+                        "site_id": site_id,
+                        "num_cpus": ghost.get("cpus", 1) or 1,
+                        "num_gpus": ghost.get("gpus", 0) or 0,
+                        "cluster_name": cluster_name,
+                        "scheduler_type": scheduler_type,
+                        "joined_at": time.time(),
+                        "source": "ray_poller",
+                    }
+                    state["pending_sites"].pop(site_id, None)
+                    stats = state["site_stats"].setdefault(site_id, {
+                        "task_count": 0, "total_ms": 0,
+                        "cluster_name": cluster_name,
+                        "scheduler_type": scheduler_type,
+                        "num_workers": 0, "node_ips": [],
+                    })
+                    if ghost["ip"] not in stats["node_ips"]:
+                        stats["node_ips"].append(ghost["ip"])
+                        stats["num_workers"] += 1
+                    _poll_log.info(
+                        f"Reconciled ghost worker {ghost['ip']} ({hostname}) "
+                        f"-> site={site_id} cluster={cluster_name}"
+                    )
+                    changed = True
+
                 if not logged_first and ray_info:
                     _poll_log.info(f"Ray poll: {len(ray_info)} nodes, sample keys: {list(nodes_summary[0].keys()) if nodes_summary else []}")
 
