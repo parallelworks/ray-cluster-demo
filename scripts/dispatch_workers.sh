@@ -1125,10 +1125,18 @@ s = socket.socket()
 s.settimeout(5)
 try:
     s.connect(('127.0.0.1', ${tunnel_ray_port}))
-    # Try to read a byte (Ray GCS should respond to connection)
+    # Try to read a byte. Three outcomes:
+    #   recv=1+   — Ray GCS responded (good)
+    #   timeout   — Ray GCS connected but didn't push (also good)
+    #   recv=0    — peer closed immediately. This is what we see when the
+    #               SSH-R server can connect to its local socket but the
+    #               forward target (workspace:6379) is unreachable. Reject.
     s.settimeout(2)
     try:
         d = s.recv(1)
+        if len(d) == 0:
+            print('connected+recv=0_(peer_closed,_head_unreachable)')
+            sys.exit(2)
         print('connected+recv=%d' % len(d))
     except socket.timeout:
         print('connected+timeout_on_recv')
@@ -1149,7 +1157,7 @@ except Exception as e:
 done
 
 if [ "\${TUNNEL_OK}" != "true" ]; then
-    report_error "Cannot reach head node through reverse tunnel on port ${tunnel_ray_port}. Last result: \${RESULT}"
+    report_error "Cannot reach head node through reverse tunnel on port ${tunnel_ray_port}. Last result: \${RESULT}. If the result says 'peer_closed,_head_unreachable', the Ray GCS on the workspace likely died — check start_ray_head logs."
     exit 1
 fi
 
@@ -1281,10 +1289,18 @@ s = socket.socket()
 s.settimeout(5)
 try:
     s.connect(('127.0.0.1', ${tunnel_ray_port}))
-    # Try to read a byte (Ray GCS should respond to connection)
+    # Try to read a byte. Three outcomes:
+    #   recv=1+   — Ray GCS responded (good)
+    #   timeout   — Ray GCS connected but didn't push (also good)
+    #   recv=0    — peer closed immediately. This is what we see when the
+    #               SSH-R server can connect to its local socket but the
+    #               forward target (workspace:6379) is unreachable. Reject.
     s.settimeout(2)
     try:
         d = s.recv(1)
+        if len(d) == 0:
+            print('connected+recv=0_(peer_closed,_head_unreachable)')
+            sys.exit(2)
         print('connected+recv=%d' % len(d))
     except socket.timeout:
         print('connected+timeout_on_recv')
@@ -1305,7 +1321,7 @@ except Exception as e:
 done
 
 if [ "\${TUNNEL_OK}" != "true" ]; then
-    report_error "Cannot reach head node through reverse tunnel on port ${tunnel_ray_port}. Last result: \${RESULT}"
+    report_error "Cannot reach head node through reverse tunnel on port ${tunnel_ray_port}. Last result: \${RESULT}. If the result says 'peer_closed,_head_unreachable', the Ray GCS on the workspace likely died — check start_ray_head logs."
     exit 1
 fi
 
@@ -1824,10 +1840,18 @@ s = socket.socket()
 s.settimeout(5)
 try:
     s.connect(('127.0.0.1', ${tunnel_ray_port}))
-    # Try to read a byte (Ray GCS should respond to connection)
+    # Try to read a byte. Three outcomes:
+    #   recv=1+   — Ray GCS responded (good)
+    #   timeout   — Ray GCS connected but didn't push (also good)
+    #   recv=0    — peer closed immediately. This is what we see when the
+    #               SSH-R server can connect to its local socket but the
+    #               forward target (workspace:6379) is unreachable. Reject.
     s.settimeout(2)
     try:
         d = s.recv(1)
+        if len(d) == 0:
+            print('connected+recv=0_(peer_closed,_head_unreachable)')
+            sys.exit(2)
         print('connected+recv=%d' % len(d))
     except socket.timeout:
         print('connected+timeout_on_recv')
@@ -1848,7 +1872,7 @@ except Exception as e:
 done
 
 if [ "\${TUNNEL_OK}" != "true" ]; then
-    report_error "Cannot reach head node through reverse tunnel on port ${tunnel_ray_port}. Last result: \${RESULT}"
+    report_error "Cannot reach head node through reverse tunnel on port ${tunnel_ray_port}. Last result: \${RESULT}. If the result says 'peer_closed,_head_unreachable', the Ray GCS on the workspace likely died — check start_ray_head logs."
     exit 1
 fi
 
