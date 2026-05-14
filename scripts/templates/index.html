@@ -1942,15 +1942,10 @@ function renderLogsSiteList() {
     list.innerHTML = '<div style="color: var(--dim); font-size: var(--text-sm); padding: var(--space-3);">No worker activity yet.</div>';
     return;
   }
-  // Pending first, then connected (most recently active first)
-  siteIds.sort((a, b) => {
-    const aPending = !!pendingSites[a] && !siteStats[a];
-    const bPending = !!pendingSites[b] && !siteStats[b];
-    if (aPending !== bPending) return aPending ? -1 : 1;
-    const aLast = (workerLogs[a].slice(-1)[0] || {}).ts || 0;
-    const bLast = (workerLogs[b].slice(-1)[0] || {}).ts || 0;
-    return bLast - aLast;
-  });
+  // Stable sort by site_id (natural numeric order: site-2, site-3, site-10).
+  // Don't reorder based on recency — the active item jumping around as lines
+  // arrive makes the page confusing to read mid-debug.
+  siteIds.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   // Default selection: first site in list if nothing selected yet
   if (!selectedLogSite || !workerLogs[selectedLogSite]) {
     selectedLogSite = siteIds[0];
