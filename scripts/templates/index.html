@@ -424,6 +424,67 @@
   }
 
   .view-hidden { display: none !important; }
+
+  /* Worker setup-log stream — terminal-style, scrollable, monospaced */
+  .worker-log {
+    margin-bottom: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--panel-alt);
+    overflow: hidden;
+  }
+  .worker-log[open] { box-shadow: var(--shadow-sm); }
+  .worker-log summary {
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .worker-log summary::-webkit-details-marker { display: none; }
+  .worker-log summary::before {
+    content: "▸";
+    color: var(--dim);
+    transition: transform 0.15s var(--ease-out);
+  }
+  .worker-log[open] summary::before { transform: rotate(90deg); }
+  .worker-log summary .wl-tag {
+    margin-left: auto;
+    color: var(--dim);
+    font-weight: 500;
+    font-size: var(--text-xs);
+  }
+  .worker-log pre {
+    margin: 0;
+    padding: var(--space-2) var(--space-3);
+    max-height: 180px;
+    overflow-y: auto;
+    background: var(--bg);
+    border-top: 1px solid var(--border);
+    font-family: 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+    font-size: 0.72rem;
+    line-height: 1.4;
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  .worker-log .wl-row {
+    display: flex;
+    gap: var(--space-2);
+  }
+  .worker-log .wl-ts {
+    color: var(--dim);
+    flex-shrink: 0;
+  }
+  .worker-log .wl-msg {
+    flex: 1;
+    min-width: 0;
+  }
 </style>
 </head>
 <body>
@@ -808,6 +869,14 @@ python my_script.py</pre>
       </div>
     </div>
 
+    <!-- Worker setup logs — streamed from dispatcher per-site -->
+    <div class="card" id="worker-logs-card">
+      <div class="card-title">Worker Logs</div>
+      <div id="worker-logs-container">
+        <div style="color: var(--dim); font-size: 0.8rem;">No worker activity yet.</div>
+      </div>
+    </div>
+
     <!-- Ray Cluster Activity (polled from Ray API) -->
     <div class="card" id="ray-activity-card">
       <div class="card-title">Cluster Activity</div>
@@ -883,6 +952,7 @@ let startTime = null;
 const siteStats = {};
 const pendingSites = {}; // site_id -> {cluster_name, scheduler_type}
 const rayNodes = {};  // node_ip -> {site_id, num_cpus, ...}
+const workerLogs = {};  // site_id -> [{ts, msg}, ...] (bounded ~200)
 let headNode = {};    // {ip, cluster_name, scheduler_type} — coordinator hub
 let rayHeadIp = '';   // Ray head IP address
 const throughputHistory = [];
@@ -1778,6 +1848,63 @@ function updateStats() {
   }
 }
 
+// Render the streamed worker setup/connect logs panel.
+// One <details> per site, terminal-styled, scrollable, auto-scrolled to end.
+function renderWorkerLogs() {
+  const container = document.getElementById('worker-logs-container');
+  if (!container) return;
+  const siteIds = Object.keys(workerLogs).filter(sid => (workerLogs[sid] || []).length > 0);
+  if (siteIds.length === 0) {
+    container.innerHTML = '<div style="color: var(--dim); font-size: 0.8rem;">No worker activity yet.</div>';
+    return;
+  }
+  // Pending first, then connected (most recently active first)
+  siteIds.sort((a, b) => {
+    const aPending = !!pendingSites[a] && !siteStats[a];
+    const bPending = !!pendingSites[b] && !siteStats[b];
+    if (aPending !== bPending) return aPending ? -1 : 1;
+    const aLast = (workerLogs[a].slice(-1)[0] || {}).ts || 0;
+    const bLast = (workerLogs[b].slice(-1)[0] || {}).ts || 0;
+    return bLast - aLast;
+  });
+  const fmtTs = (ts) => {
+    try {
+      const d = new Date(ts * 1000);
+      return d.toLocaleTimeString([], { hour12: false });
+    } catch (e) {
+      return '';
+    }
+  };
+  const escapeHtml = (s) => s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  // Preserve <details> open state across re-renders.
+  const openSet = new Set(
+    Array.from(container.querySelectorAll('details.worker-log[open]')).map(el => el.dataset.siteId)
+  );
+  // Default-open the first (most relevant) site if user hasn't interacted.
+  if (openSet.size === 0 && siteIds.length > 0) openSet.add(siteIds[0]);
+
+  container.innerHTML = siteIds.map(siteId => {
+    const lines = workerLogs[siteId];
+    const name = (siteStats[siteId] || pendingSites[siteId] || {}).cluster_name || siteId;
+    const last = lines.slice(-1)[0] || {};
+    const tail = lines.slice(-100);  // cap visible to last 100 in DOM
+    const rows = tail.map(l =>
+      `<div class="wl-row"><span class="wl-ts">${fmtTs(l.ts)}</span><span class="wl-msg">${escapeHtml(l.msg)}</span></div>`
+    ).join('');
+    const isOpen = openSet.has(siteId) ? ' open' : '';
+    return `
+      <details class="worker-log" data-site-id="${siteId}"${isOpen}>
+        <summary>${escapeHtml(name)} <span class="wl-tag">${lines.length} line${lines.length === 1 ? '' : 's'}</span></summary>
+        <pre data-site-id="${siteId}">${rows}</pre>
+      </details>`;
+  }).join('');
+
+  // Auto-scroll each <pre> to the bottom so the latest line is visible.
+  container.querySelectorAll('pre[data-site-id]').forEach(pre => {
+    pre.scrollTop = pre.scrollHeight;
+  });
+}
+
 // WebSocket connection
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -1789,6 +1916,15 @@ function connect() {
   ws.onmessage = (evt) => {
     const msg = JSON.parse(evt.data);
 
+    if (msg.type === 'worker_log') {
+      const sid = msg.site_id || 'unknown';
+      const buf = workerLogs[sid] || (workerLogs[sid] = []);
+      (msg.lines || []).forEach(l => buf.push(l));
+      // Bound on client side to match server cap
+      if (buf.length > 200) buf.splice(0, buf.length - 200);
+      renderWorkerLogs();
+      return;
+    }
     if (msg.type === 'pending_site') {
       pendingSites[msg.site_id] = {cluster_name: msg.cluster_name, scheduler_type: msg.scheduler_type};
       getSiteColor(msg.site_id);
@@ -2082,6 +2218,21 @@ switchTab('cluster');
 connect();
 animateTopology();
 setInterval(() => updateStats(), 1000);
+
+// Seed workerLogs from /api/state so late-joining browsers see prior lines.
+(function seedWorkerLogs() {
+  const basePath = location.pathname.replace(/\/$/, '');
+  fetch(basePath + '/api/state')
+    .then(r => r.ok ? r.json() : null)
+    .then(data => {
+      if (!data || !data.worker_logs) return;
+      Object.keys(data.worker_logs).forEach(sid => {
+        workerLogs[sid] = data.worker_logs[sid];
+      });
+      renderWorkerLogs();
+    })
+    .catch(() => {});
+})();
 </script>
 </body>
 </html>

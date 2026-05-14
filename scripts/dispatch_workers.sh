@@ -2002,8 +2002,15 @@ WORKER_SCRIPT
     # Pipe script via stdin to avoid quoting issues with SSH command strings
     echo "[${site_name}] Connecting via SSH (${SSH_MODE} mode, target: ${SSH_TARGET})..."
     set -o pipefail
+    # Pipe SSH output through stream_logs.py so each line shows up both in
+    # the dispatcher log (with site prefix, as before) AND in the live
+    # dashboard's per-site "Worker logs" panel via /api/worker/log.
     ssh "${SSH_ARGS[@]}" "${SSH_LOGIN_USER}@${SSH_TARGET}" 'bash -s' < "${script_file}" 2>&1 | \
-        sed -u "s/^/[${site_name}] /"
+        python3 -u "${SCRIPT_DIR}/stream_logs.py" \
+            --site-id "${site_id}" \
+            --cluster-name "${site_name}" \
+            --dashboard "http://localhost:${DASHBOARD_PORT}" \
+            --prefix "[${site_name}] "
     local ssh_exit=$?
     set +o pipefail
     echo "[${site_name}] SSH session ended (exit code: ${ssh_exit})"
