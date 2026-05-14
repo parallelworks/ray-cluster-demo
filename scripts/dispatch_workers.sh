@@ -265,16 +265,21 @@ fi
 [ -z "${CLUSTER_NAME}" ] && CLUSTER_NAME="${WORKER_SITE_NAME}"
 
 # Register with dashboard
-curl -s -X POST "http://${WORKER_HEAD_IP}:${WORKER_DASH_PORT}/api/worker" \
-    -H "Content-Type: application/json" \
-    -d "{
-        \"site_id\": \"site-1\",
-        \"worker_ip\": \"${WORKER_IP}\",
-        \"num_cpus\": 1,
-        \"num_gpus\": ${NUM_GPUS},
-        \"cluster_name\": \"${CLUSTER_NAME}\",
-        \"scheduler_type\": \"pbs\"
-    }" 2>/dev/null || echo "Note: Could not notify dashboard"
+register_with_dashboard() {
+    curl -s --retry 5 --retry-delay 2 --retry-connrefused \
+        --connect-timeout 5 --max-time 15 \
+        -X POST "http://${WORKER_HEAD_IP}:${WORKER_DASH_PORT}/api/worker" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"site_id\": \"site-1\",
+            \"worker_ip\": \"${WORKER_IP}\",
+            \"num_cpus\": 1,
+            \"num_gpus\": ${NUM_GPUS},
+            \"cluster_name\": \"${CLUSTER_NAME}\",
+            \"scheduler_type\": \"pbs\"
+        }" >/dev/null 2>&1
+}
+register_with_dashboard || echo "Note: Could not notify dashboard"
 
 echo "=========================================="
 echo "Ray Worker RUNNING on $(hostname)"
@@ -282,9 +287,14 @@ echo "  Head: ${WORKER_HEAD_IP}:6379"
 echo "  Worker IP: ${WORKER_IP}"
 echo "=========================================="
 
-# Keep alive
+# Keep alive — heartbeat re-register every ~2min handles dashboard restart.
+HEARTBEAT=0
 while true; do
     ray status 2>/dev/null || echo "Worker health: $(date)"
+    HEARTBEAT=$((HEARTBEAT + 1))
+    if [ $((HEARTBEAT % 4)) -eq 0 ]; then
+        register_with_dashboard || true
+    fi
     sleep 30
 done
 NODE_SCRIPT
@@ -419,16 +429,21 @@ fi
 [ -z "\${CLUSTER_NAME}" ] && CLUSTER_NAME="${site_name}"
 
 # Register with dashboard
-curl -s -X POST "http://\${HEAD_IP}:\${DASH_PORT}/api/worker" \
-    -H "Content-Type: application/json" \
-    -d "{
-        \"site_id\": \"site-1\",
-        \"worker_ip\": \"\${WORKER_IP}\",
-        \"num_cpus\": 1,
-        \"num_gpus\": \${NUM_GPUS},
-        \"cluster_name\": \"\${CLUSTER_NAME}\",
-        \"scheduler_type\": \"slurm\"
-    }" 2>/dev/null || echo "Note: Could not notify dashboard"
+register_with_dashboard() {
+    curl -s --retry 5 --retry-delay 2 --retry-connrefused \
+        --connect-timeout 5 --max-time 15 \
+        -X POST "http://\${HEAD_IP}:\${DASH_PORT}/api/worker" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"site_id\": \"site-1\",
+            \"worker_ip\": \"\${WORKER_IP}\",
+            \"num_cpus\": 1,
+            \"num_gpus\": \${NUM_GPUS},
+            \"cluster_name\": \"\${CLUSTER_NAME}\",
+            \"scheduler_type\": \"slurm\"
+        }" >/dev/null 2>&1
+}
+register_with_dashboard || echo "Note: Could not notify dashboard"
 
 echo "=========================================="
 echo "Ray Worker RUNNING on \$(hostname)"
@@ -436,9 +451,14 @@ echo "  Head: \${HEAD_IP}:6379"
 echo "  Worker IP: \${WORKER_IP}"
 echo "=========================================="
 
-# Keep alive
+# Keep alive — heartbeat re-register every ~2min handles dashboard restart.
+HEARTBEAT=0
 while true; do
     ray status 2>/dev/null || echo "Worker health: \$(date)"
+    HEARTBEAT=\$((HEARTBEAT + 1))
+    if [ \$((HEARTBEAT % 4)) -eq 0 ]; then
+        register_with_dashboard || true
+    fi
     sleep 30
 done
 WORKER_SCRIPT
@@ -972,22 +992,33 @@ fi
 [ -z "\${CLUSTER_NAME}" ] && CLUSTER_NAME="\${EXPECTED_CLUSTER_NAME:-\${MY_SITE_ID}}"
 
 DASHBOARD_URL="http://\${LOGIN_HOST}:\${PROXY_DASH_PORT}"
-curl -s -X POST "\${DASHBOARD_URL}/api/worker" \
-    -H "Content-Type: application/json" \
-    -d "{
-        \"site_id\": \"\${EXPECTED_SITE_ID:-\${MY_SITE_ID}}\",
-        \"worker_ip\": \"\${MY_TUNNEL_IP}\",
-        \"num_cpus\": 1,
-        \"num_gpus\": \${NUM_GPUS},
-        \"cluster_name\": \"\${CLUSTER_NAME}\",
-        \"scheduler_type\": \"\${SCHED_TYPE}\"
-    }" 2>/dev/null || echo "Note: Could not notify dashboard"
+register_with_dashboard() {
+    curl -s --retry 5 --retry-delay 2 --retry-connrefused \\
+        --connect-timeout 5 --max-time 15 \\
+        -X POST "\${DASHBOARD_URL}/api/worker" \\
+        -H "Content-Type: application/json" \\
+        -d "{
+            \\"site_id\\": \\"\${EXPECTED_SITE_ID:-\${MY_SITE_ID}}\\",
+            \\"worker_ip\\": \\"\${MY_TUNNEL_IP}\\",
+            \\"num_cpus\\": 1,
+            \\"num_gpus\\": \${NUM_GPUS},
+            \\"cluster_name\\": \\"\${CLUSTER_NAME}\\",
+            \\"scheduler_type\\": \\"\${SCHED_TYPE}\\"
+        }" >/dev/null 2>&1
+}
+register_with_dashboard || echo "Note: Could not notify dashboard"
 
 echo "Worker \${PROC_ID} RUNNING (tunnel IP: \${MY_TUNNEL_IP})"
 
-# Keep alive
+# Keep alive — heartbeat re-registers every ~2min so a restarted dashboard
+# repopulates state.nodes without waiting for the worker to die + redispatch.
+HEARTBEAT=0
 while true; do
     ray status 2>/dev/null || echo "Worker \${PROC_ID} health: \$(date)"
+    HEARTBEAT=\$((HEARTBEAT + 1))
+    if [ \$((HEARTBEAT % 4)) -eq 0 ]; then
+        register_with_dashboard || true
+    fi
     sleep 30
 done
 SRUN_TASK_EOF
@@ -1543,22 +1574,32 @@ fi
 [ -z "\${CLUSTER_NAME}" ] && CLUSTER_NAME="\${EXPECTED_CLUSTER_NAME:-\${MY_SITE_ID}}"
 
 DASHBOARD_URL="http://\${LOGIN_HOST}:\${PROXY_DASH_PORT}"
-curl -s -X POST "\${DASHBOARD_URL}/api/worker" \
-    -H "Content-Type: application/json" \
-    -d "{
-        \"site_id\": \"\${EXPECTED_SITE_ID:-\${MY_SITE_ID}}\",
-        \"worker_ip\": \"\${MY_TUNNEL_IP}\",
-        \"num_cpus\": 1,
-        \"num_gpus\": \${NUM_GPUS},
-        \"cluster_name\": \"\${CLUSTER_NAME}\",
-        \"scheduler_type\": \"\${SCHED_TYPE}\"
-    }" 2>/dev/null || echo "Note: Could not notify dashboard"
+register_with_dashboard() {
+    curl -s --retry 5 --retry-delay 2 --retry-connrefused \
+        --connect-timeout 5 --max-time 15 \
+        -X POST "\${DASHBOARD_URL}/api/worker" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"site_id\": \"\${EXPECTED_SITE_ID:-\${MY_SITE_ID}}\",
+            \"worker_ip\": \"\${MY_TUNNEL_IP}\",
+            \"num_cpus\": 1,
+            \"num_gpus\": \${NUM_GPUS},
+            \"cluster_name\": \"\${CLUSTER_NAME}\",
+            \"scheduler_type\": \"\${SCHED_TYPE}\"
+        }" >/dev/null 2>&1
+}
+register_with_dashboard || echo "Note: Could not notify dashboard"
 
 echo "Worker \${PROC_ID} RUNNING (tunnel IP: \${MY_TUNNEL_IP})"
 
-# Keep alive
+# Keep alive — heartbeat re-register every ~2min handles dashboard restart.
+HEARTBEAT=0
 while true; do
     ray status 2>/dev/null || echo "Worker \${PROC_ID} health: \$(date)"
+    HEARTBEAT=\$((HEARTBEAT + 1))
+    if [ \$((HEARTBEAT % 4)) -eq 0 ]; then
+        register_with_dashboard || true
+    fi
     sleep 30
 done
 PBS_TASK_EOF
@@ -1893,16 +1934,21 @@ fi
 
 echo "Detected cluster: \${CLUSTER_NAME} (\${SCHED_TYPE})"
 
-curl -s -X POST "\${DASHBOARD_URL}/api/worker" \\
-    -H "Content-Type: application/json" \\
-    -d "{
-        \"site_id\": \"${site_id}\",
-        \"worker_ip\": \"${ip}\",
-        \"num_cpus\": 1,
-        \"num_gpus\": \${NUM_GPUS},
-        \"cluster_name\": \"\${CLUSTER_NAME}\",
-        \"scheduler_type\": \"\${SCHED_TYPE}\"
-    }" 2>/dev/null || echo "Note: Could not notify dashboard"
+register_with_dashboard() {
+    curl -s --retry 5 --retry-delay 2 --retry-connrefused \\
+        --connect-timeout 5 --max-time 15 \\
+        -X POST "\${DASHBOARD_URL}/api/worker" \\
+        -H "Content-Type: application/json" \\
+        -d "{
+            \"site_id\": \"${site_id}\",
+            \"worker_ip\": \"${ip}\",
+            \"num_cpus\": 1,
+            \"num_gpus\": \${NUM_GPUS},
+            \"cluster_name\": \"\${CLUSTER_NAME}\",
+            \"scheduler_type\": \"\${SCHED_TYPE}\"
+        }" >/dev/null 2>&1
+}
+register_with_dashboard || echo "Note: Could not notify dashboard"
 
 echo "=========================================="
 echo "Ray Worker RUNNING"
@@ -1914,12 +1960,18 @@ echo "=========================================="
 # for several consecutive checks the raylet is gone (typically SIGKILLed —
 # on HPC login nodes, process-policy enforcers like ma_healthcheck on
 # HPCMP sites reap user daemons). Post a context-aware error to the
-# dashboard so the user sees what happened and how to fix it.
+# dashboard so the user sees what happened and how to fix it. A heartbeat
+# re-registers every ~2min so a restarted dashboard repopulates state.nodes.
 CONSECUTIVE_FAILS=0
 DEATH_THRESHOLD=3
+HEARTBEAT=0
 while true; do
     if ray status >/dev/null 2>&1; then
         CONSECUTIVE_FAILS=0
+        HEARTBEAT=\$((HEARTBEAT + 1))
+        if [ \$((HEARTBEAT % 4)) -eq 0 ]; then
+            register_with_dashboard || true
+        fi
     else
         CONSECUTIVE_FAILS=\$((CONSECUTIVE_FAILS + 1))
         echo "Worker health check FAILED (\${CONSECUTIVE_FAILS}/\${DEATH_THRESHOLD}): \$(date)"
@@ -1929,7 +1981,8 @@ while true; do
                 ERR_MSG="\${ERR_MSG} HPC login nodes often run process-policy enforcers (e.g. ma_healthcheck on HPCMP) that SIGKILL user daemons. Set use_scheduler=true so the worker runs on a SLURM/PBS compute node instead of the login node."
             fi
             echo "Reporting worker death to dashboard: \${ERR_MSG}"
-            curl -s --connect-timeout 5 -X POST "\${DASHBOARD_URL}/api/worker/error" \\
+            curl -s --retry 3 --retry-delay 2 --connect-timeout 5 --max-time 15 \\
+                -X POST "\${DASHBOARD_URL}/api/worker/error" \\
                 -H "Content-Type: application/json" \\
                 -d "{
                     \"site_id\": \"${site_id}\",
