@@ -20,7 +20,8 @@ RAY_VERSION="${RAY_VERSION:-2.40.0}"
 # (HOME quota is small on some HPC systems)
 SOFTWARE_DIR="${HOME}/pw/software"
 for _workdir in "${WORKDIR:-}" "${SCRATCH:-}" "${WORK:-}" "${SCRATCHDIR:-}"; do
-    if [ -n "${_workdir}" ] && [ -d "${_workdir}" ]; then
+    _workdir="${_workdir%/}"
+    if [ -n "${_workdir}" ] && [ -d "${_workdir}" ] && [ -w "${_workdir}" ]; then
         SOFTWARE_DIR="${_workdir}/pw/software"
         break
     fi
