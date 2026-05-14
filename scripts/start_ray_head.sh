@@ -87,6 +87,21 @@ ${PYTHON_CMD} -c "import fastapi" 2>/dev/null || {
 echo "Stopping any existing Ray processes..."
 ray stop --force 2>/dev/null || true
 
+# Aggressive cleanup: `ray stop` only kills processes whose session metadata
+# it can find. Orphaned gcs_server/raylet/dashboard processes from a
+# cancelled prior run can survive and either bind RAY_PORT or, more
+# subtly, race the new head down within seconds of `ray start`. Nuke them.
+for proc in gcs_server raylet 'ray/_private/log_monitor' 'ray.dashboard'; do
+    pkill -9 -f "${proc}" 2>/dev/null || true
+done
+# Prune session dirs older than 1h so /tmp/ray/session_latest doesn't
+# drift and stale plasma files don't confuse the new raylet.
+find /tmp/ray -maxdepth 1 -name "session_*" -type d -mmin +60 \
+    -exec rm -rf {} \; 2>/dev/null || true
+
+# Give the kernel a beat to release ports before we re-bind.
+sleep 1
+
 # Get real network IP (not loopback)
 HEAD_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
 if [ -z "${HEAD_IP}" ] || [[ "${HEAD_IP}" == 127.* ]]; then
@@ -219,10 +234,30 @@ if kill -0 ${SERVER_PID} 2>/dev/null; then
         -d "{\"ip\": \"${HEAD_IP}\", \"cluster_name\": \"${CLUSTER_NAME}\", \"scheduler_type\": \"${SCHEDULER_TYPE}\"}" \
         2>/dev/null || echo "Warning: Could not register head node with dashboard"
 
-    # Keep SSH session alive
+    # Keep SSH session alive AND watch Ray itself. The dashboard staying up
+    # tells us nothing about GCS/raylet — those can die independently
+    # (seen on rerun: gcs_server exits ~10s after start without errors in
+    # its logs). Detect persistent `ray status` failures so the workflow
+    # surfaces a hard failure instead of spinning forever while every
+    # worker can't reach localhost:6379 via the reverse tunnel.
+    RAY_FAILS=0
+    RAY_FAIL_THRESHOLD=3
     while kill -0 ${SERVER_PID} 2>/dev/null; do
-        # Periodic health check
-        ray status 2>/dev/null || echo "Ray health check: $(date)"
+        if ray status >/dev/null 2>&1; then
+            RAY_FAILS=0
+        else
+            RAY_FAILS=$((RAY_FAILS + 1))
+            echo "Ray health check FAILED (${RAY_FAILS}/${RAY_FAIL_THRESHOLD}): $(date)"
+            if [ ${RAY_FAILS} -ge ${RAY_FAIL_THRESHOLD} ]; then
+                echo "[FATAL] Ray head ($(cat /tmp/ray/session_latest/node_ip_address 2>/dev/null || echo "${HEAD_IP}"):${RAY_PORT}) is unreachable after ${RAY_FAILS} checks." >&2
+                echo "[FATAL] GCS or raylet died on the workspace; worker tunnels will fail. Failing the step so the workflow exits cleanly." >&2
+                # Drop the custom dashboard too — workers will see /api/worker fail
+                # immediately instead of timing out, and the user gets a clear
+                # workflow failure to retry from.
+                kill ${SERVER_PID} 2>/dev/null || true
+                exit 1
+            fi
+        fi
         sleep 10
     done
     echo "Dashboard process exited"
