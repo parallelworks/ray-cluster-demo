@@ -44,6 +44,9 @@ state = {
     "fractal_tiles": {},  # (tx, ty) string key -> tile data
     # Pending sites (dispatched but workers not yet connected)
     "pending_sites": {},  # site_id -> {cluster_name, scheduler_type}
+    # Streaming worker setup/connect logs — bounded ring buffer per site so
+    # users can watch each site connect without sshing into the workspace.
+    "worker_logs": {},  # site_id -> [{ts, msg}, ...] (most recent last)
     # Throughput time series (built by poller from Ray task count deltas)
     "throughput_history": [],  # [{ts: epoch, total: tasks/s, perSite: {site_id: rate}}]
     "_prev_completed": 0,     # previous total_completed for delta calc
@@ -72,6 +75,7 @@ def _reset_state():
     state["throughput_history"] = []
     state["_prev_completed"] = 0
     state["_prev_site_counts"] = {}
+    state["worker_logs"] = {}
     global _dashboard_start_time
     _dashboard_start_time = time.time()
     # Preserve pending_sites and head_node across config resets — they are set
@@ -602,6 +606,48 @@ async def register_head(request: Request):
     return {"status": "ok"}
 
 
+WORKER_LOG_BUFFER_PER_SITE = 200
+
+
+@app.post("/api/worker/log")
+async def worker_log(request: Request):
+    """Stream worker setup/connect output. Accepts either a single `line`
+    or a batched `lines` (list of {ts, msg} or strings) for efficiency."""
+    body = await request.json()
+    site_id = body.get("site_id") or "unknown"
+    cluster_name = body.get("cluster_name", "") or ""
+    raw = body.get("lines")
+    if raw is None and body.get("line") is not None:
+        raw = [body["line"]]
+    if not raw:
+        return {"status": "ok"}
+
+    buf = state["worker_logs"].setdefault(site_id, [])
+    now = time.time()
+    new_entries = []
+    for item in raw:
+        if isinstance(item, dict):
+            msg = str(item.get("msg", ""))
+            ts = float(item.get("ts", now))
+        else:
+            msg = str(item)
+            ts = now
+        entry = {"ts": ts, "msg": msg}
+        buf.append(entry)
+        new_entries.append(entry)
+    # Trim to bounded buffer
+    if len(buf) > WORKER_LOG_BUFFER_PER_SITE:
+        del buf[: len(buf) - WORKER_LOG_BUFFER_PER_SITE]
+
+    await _broadcast({
+        "type": "worker_log",
+        "site_id": site_id,
+        "cluster_name": cluster_name,
+        "lines": new_entries,
+    })
+    return {"status": "ok"}
+
+
 @app.post("/api/worker/pending")
 async def worker_pending(request: Request):
     """Mark a site as pending (dispatched but workers not yet connected)."""
@@ -994,6 +1040,7 @@ async def get_state():
         "ray_cluster_nodes": state.get("ray_cluster_nodes", []),
         "ray_jobs": state.get("ray_jobs", []),
         "ray_task_counts": state.get("_ray_task_counts", {}),
+        "worker_logs": state.get("worker_logs", {}),
     }
     if state["workload_type"] == "fractal":
         result["grid_size"] = state["grid_size"]
